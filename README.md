@@ -99,7 +99,7 @@ The model is trained on **on-tree orchard canopy datasets** (Roboflow Universe) 
 
 1. Open VS Code and create your backend directory structure:
    ```text
-   yolo_fruit_backend/
+   backend/
    ├── weights/
    │   └── best.pt         <-- Place your downloaded best.pt here!
    ├── app.py              <-- FastAPI application
@@ -134,8 +134,8 @@ The model is trained on **on-tree orchard canopy datasets** (Roboflow Universe) 
 
 1. Create React + Vite frontend project:
    ```bash
-   npm create vite@latest fruit-detection-frontend -- --template react-ts
-   cd fruit-detection-frontend
+   npm create vite@latest frontend -- --template react-ts
+   cd frontend
    ```
 
 2. Install **Ant Design (`antd`)**, icons, and `axios`:
