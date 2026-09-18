@@ -33,16 +33,22 @@ This project delivers a **single forward pass YOLOv8s AI pipeline** that solves 
 
 ## 🏷️ Dataset & Class Mapping
 
-The model is trained on **on-tree orchard canopy datasets** (Roboflow Universe) using a unified **4-Class Master Schema**:
+The model is trained on **on-tree orchard canopy datasets** (Roboflow Universe) using a
+**7-Class Master Schema** that keeps each fruit's own ripeness scale rather than
+collapsing both into a shared binary:
 
-| Class ID | Master Class Name | Description | Source Mapping |
-|:---:|---|---|---|
-| **`0`** | `mango_unripe` | Green pre-harvest mangoes on branches | `early-fruit`, `Premature`, `mature` |
-| **`1`** | `mango_ripe` | Harvest-ready mangoes | `ripe` |
-| **`2`** | `dragonfruit_unripe` | Green unripe dragon fruit on pillars | `Unripe` |
-| **`3`** | `dragonfruit_ripe` | Red ripe dragon fruit on pillars | `Ripe` |
+| Class ID | Master Class Name | Source label |
+|:---:|---|---|
+| **`0`** | `mango_premature` | mango `Premature` |
+| **`1`** | `mango_early` | mango `early-fruit` |
+| **`2`** | `mango_mature` | mango `mature` |
+| **`3`** | `mango_ripe` | mango `ripe` |
+| **`4`** | `dragonfruit_unripe` | dragon fruit `Unripe` |
+| **`5`** | `dragonfruit_ripe` | dragon fruit `Ripe` |
+| **`6`** | `dragonfruit_rotten` | dragon fruit `Rotten` |
 
-> ⚠️ **Note on Disease Exclusion**: The `Rotten` disease label was intentionally removed because fruit decay is a pathology rather than a stage on the biological ripeness continuum. Removing it eliminated label noise.
+Labels are mapped by **name**, never by source id - the two Roboflow exports assign
+different ids to the same concept, so an id-based merge silently corrupts labels.
 
 ---
 
@@ -88,10 +94,21 @@ The model is trained on **on-tree orchard canopy datasets** (Roboflow Universe) 
 
 ### Part 1: Google Colab Model Training
 
-1. Open **Google Colab** and enable GPU (`Runtime -> Change runtime type -> T4 GPU`).
-2. Run the master Colab training script available in `docs/colab_yolo_fruit_detection.py`.
-3. After 30 epochs finish, download the best model weights file:
-   `/content/runs/detect/fruit_yolov8s_proposal_run/weights/best.pt`
+Open the training notebook in Colab:
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/khuyenabc123/fruit_detection/blob/main/training/train_yolo.ipynb)
+
+1. **File -> Save a copy in Drive** (opening from GitHub is read-only).
+2. Enable GPU: `Runtime -> Change runtime type -> T4 GPU`.
+3. Upload `mango_dataset.zip` and `dragonfruit_dataset.zip` to `MyDrive/fruit_data/`.
+4. Run the cells in order. **Stop at Step 4** and read the class distribution it
+   prints before starting the 2-3 hour training run.
+5. Step 6B copies everything to `MyDrive/fruit_detection_runs/`. Download
+   `weights/best.pt` from there into `backend/weights/`.
+
+The notebook is generated from `training/fruit_yolo_detection.py`, which holds the
+same pipeline as plain functions. After editing that file, regenerate with
+`python training/build_notebook.py` so the two cannot drift.
 
 ---
 
@@ -206,6 +223,12 @@ Uploads an image file and runs YOLOv8 fruit detection & ripeness assessment.
 ---
 
 ## 📊 Evaluation Metrics & Results
+
+> ⚠️ **Stale — these numbers are from the previous 4-class model.** They were also
+> measured before the leakage regrouping was applied, so they are optimistic: the
+> mango set is 2004 images generated from only 926 source photos, and 456 of those
+> photos had augmented variants in more than one split. Re-run Step 6 of the notebook
+> after training the 7-class model and replace this section.
 
 Evaluated on the **714 untouched test images**:
 
