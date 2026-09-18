@@ -106,9 +106,6 @@ Open the training notebook in Colab:
 5. Step 6B copies everything to `MyDrive/fruit_detection_runs/`. Download
    `weights/best.pt` from there into `backend/weights/`.
 
-The notebook is generated from `training/fruit_yolo_detection.py`, which holds the
-same pipeline as plain functions. After editing that file, regenerate with
-`python training/build_notebook.py` so the two cannot drift.
 
 ---
 
