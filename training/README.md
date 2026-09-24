@@ -31,6 +31,8 @@ Public CC BY archives are downloaded once and cached under
 `MyDrive/fruit_data/public_raw/`. Each Colab runtime extracts them to `/content`
 for faster preparation and training. Checkpoints, calibration files, test plots,
 and split manifests are stored under `MyDrive/fruit_two_stage/`.
+The minimal training cache is about 1.4 GB; the unused quality/branch/deep-yield
+archives are not downloaded by the Colab notebook.
 
 ## Data rules enforced by the preparation script
 

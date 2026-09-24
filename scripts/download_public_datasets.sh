@@ -93,12 +93,14 @@ if [[ "${profile}" == "all" ]]; then
     "e6a98fed9109f17f887ec33f497aff95"
 fi
 
-download_and_verify \
-  "Mango deep-yield" \
-  "https://ndownloader.figshare.com/files/26469419" \
-  "mango_deep_yield.zip" \
-  "md5" \
-  "56a47595422ebba6f3d0c8dfe126e677"
+if [[ "${profile}" == "all" ]]; then
+  download_and_verify \
+    "Mango deep-yield" \
+    "https://ndownloader.figshare.com/files/26469419" \
+    "mango_deep_yield.zip" \
+    "md5" \
+    "56a47595422ebba6f3d0c8dfe126e677"
+fi
 
 download_and_verify \
   "Dragon fruit maturity classification" \
@@ -121,7 +123,9 @@ extract_once "mango_on_tree_segmentation.zip" "mango_on_tree_segmentation"
 if [[ "${profile}" == "all" ]]; then
   extract_once "mango_branch_segmentation.zip" "mango_branch_segmentation"
 fi
-extract_once "mango_deep_yield.zip" "mango_deep_yield"
+if [[ "${profile}" == "all" ]]; then
+  extract_once "mango_deep_yield.zip" "mango_deep_yield"
+fi
 extract_once "dragon_fruit_maturity.zip" "dragon_fruit_maturity"
 if [[ "${profile}" == "all" ]]; then
   extract_once "dragon_fruit_quality.zip" "dragon_fruit_quality"
