@@ -76,7 +76,7 @@ different ids to the same concept, so an id-based merge silently corrupts labels
                      │
                      │ Returns JSON Response
                      ▼
-{ "total_count": 5, "counts": { "mango_unripe": 3, ... }, "annotated_image_base64": "data:image/jpeg;base64,..." }
+{ "total_count": 5, "counts": { "mango_premature": 3, ... }, "annotated_image_base64": "data:image/jpeg;base64,..." }
 ```
 
 ---
@@ -92,7 +92,21 @@ different ids to the same concept, so an id-based merge silently corrupts labels
 
 ## 🛠️ Step-by-Step Installation & Execution Guide
 
+### Deploy và thử model 7 lớp mà không cài PyTorch trên máy
+
+Model 80 epoch đã được lưu riêng tại `backend/weights/fruit_yolov8s_7class.pt`.
+Xem [DEPLOY_MODAL.md](DEPLOY_MODAL.md) để đưa FastAPI và React lên cùng một URL
+Modal. Trang `/` cho phép tải ảnh và kiểm tra kết quả, `/detect` là API, `/docs`
+là tài liệu API và `/health` báo trạng thái model.
+
 ### Part 1: Google Colab Model Training
+
+> **Recommended pipeline:** use
+> [`training/train_two_stage_colab.ipynb`](training/train_two_stage_colab.ipynb).
+> It trains a species detector plus separate mango/dragon-fruit classifiers,
+> removes exact duplicates, groups augmented variants before splitting, and
+> calibrates classifier confidence. The older notebook below is retained only
+> to reproduce the current single-pass 7-class checkpoint.
 
 Open the training notebook in Colab:
 
@@ -103,8 +117,45 @@ Open the training notebook in Colab:
 3. Upload `mango_dataset.zip` and `dragonfruit_dataset.zip` to `MyDrive/fruit_data/`.
 4. Run the cells in order. **Stop at Step 4** and read the class distribution it
    prints before starting the 2-3 hour training run.
-5. Step 6B copies everything to `MyDrive/fruit_detection_runs/`. Download
-   `weights/best.pt` from there into `backend/weights/`.
+5. Step 5 saves checkpoints directly to `MyDrive/fruit_detection_runs/`.
+   Step 6B does not copy again in this case. Download the trained
+   `weights/best.pt` from Drive into `backend/weights/` for the local demo.
+
+### Sau khi train xong: đánh giá và chạy thử
+
+1. **Đánh giá trên tập test:** Trong Colab, chạy Step 6 của
+   `training/train_yolo.ipynb` (`metrics = step6_evaluate_test(best, data_yaml)`).
+   Nếu Colab đã khởi động lại, chỉ đo metric khi còn **đúng tập test đã dùng lúc
+   train**. Step 4 hiện chưa lưu danh sách ảnh theo split và thứ tự duyệt file có
+   thể thay đổi, nên chạy lại Step 1–4 có thể tạo tập test khác, lẫn ảnh từng ở
+   tập train. Đặt `best = "/content/drive/MyDrive/fruit_detection_runs/fruit_yolov8s_7class/weights/best.pt"`
+   sau khi mount Drive; không chạy lại Step 5. Xem `mAP50`, `mAP50-95`,
+   precision/recall từng lớp và `test_evaluation/confusion_matrix.png` trong Drive.
+2. **Thử ảnh mới:** Upload ảnh vườn chưa dùng khi train, rồi gọi
+   `step7_inference_image(best, "/content/ten_anh.jpg")` ở Step 7. So sánh box,
+   nhãn và số quả với ảnh gốc; thử cả ánh sáng yếu, che khuất và nhiều quả sát nhau.
+3. **Thử video:** Gọi `step8_video_tracking(best, "/content/video.mp4")` ở
+   Step 8 để xem track ID và số quả duy nhất. Kiểm tra bằng mắt vì track ID có
+   thể bị đổi khi quả bị che hoặc camera di chuyển mạnh.
+4. **Chạy demo trên máy:** Mặc định backend dùng
+   `backend/weights/fruit_yolov8s_7class.pt`. Từ thư mục gốc project chạy:
+
+   ```bash
+   python3 -m venv .venv
+   source .venv/bin/activate
+   pip install -r backend/requirements.txt
+   uvicorn backend.app:app --port 8000
+   ```
+
+   Trong terminal khác chạy `cd frontend && npm ci && npm run dev`, rồi mở
+   `http://localhost:5173`. Có thể thử API trực tiếp bằng
+   `curl -F "file=@/duong/dan/anh.jpg" "http://localhost:8000/detect?conf_threshold=0.25"`.
+   API và giao diện đọc tên lớp từ weight, nên hỗ trợ cả schema 4 và 7 lớp.
+
+**Lưu ý:** `backend/weights/best.pt` vẫn là model 4 lớp cũ; backend mặc định
+dùng file 7 lớp mới. Có thể đặt biến `MODEL_PATH` để chọn checkpoint khác.
+Repo không chứa tập test, nên bước đo metric cần chạy trong Colab với dataset đã
+chuẩn bị ở Step 4.
 
 
 ---
@@ -115,7 +166,8 @@ Open the training notebook in Colab:
    ```text
    backend/
    ├── weights/
-   │   └── best.pt         <-- Place your downloaded best.pt here!
+   │   ├── best.pt                    <-- Older 4-class model
+   │   └── fruit_yolov8s_7class.pt   <-- Recovered 7-class model
    ├── app.py              <-- FastAPI application
    └── requirements.txt    <-- Dependencies
    ```
@@ -200,15 +252,18 @@ Uploads an image file and runs YOLOv8 fruit detection & ripeness assessment.
   "filename": "orchard_sample.jpg",
   "total_count": 4,
   "counts": {
-    "mango_unripe": 2,
+    "mango_premature": 2,
+    "mango_early": 0,
+    "mango_mature": 0,
     "mango_ripe": 1,
     "dragonfruit_unripe": 0,
-    "dragonfruit_ripe": 1
+    "dragonfruit_ripe": 1,
+    "dragonfruit_rotten": 0
   },
   "detections": [
     {
       "class_id": 0,
-      "class_name": "mango_unripe",
+      "class_name": "mango_premature",
       "confidence": 0.9421,
       "bbox": [120.5, 45.2, 310.8, 280.4]
     }

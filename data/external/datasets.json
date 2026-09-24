@@ -1,0 +1,96 @@
+{
+  "generated_on": "2026-09-24",
+  "license_policy": "Only datasets with an explicit open license are included.",
+  "datasets": [
+    {
+      "id": "mango_yolo",
+      "title": "MangoYOLO data set",
+      "species": "mango",
+      "task": "object_detection",
+      "source_page": "https://acquire.cqu.edu.au/articles/dataset/MangoYOLO_data_set/13450661",
+      "download_url": "https://ndownloader.figshare.com/files/26220632",
+      "license": "CC BY 4.0",
+      "archive_bytes": 162591604,
+      "checksum": {
+        "algorithm": "md5",
+        "value": "6702f497522098e0068bf39eb3bc79e9"
+      },
+      "notes": "Pascal VOC bounding boxes; 1,730 orchard images; no ripeness labels."
+    },
+    {
+      "id": "mango_on_tree_segmentation",
+      "title": "On-tree mango instance segmentation dataset",
+      "species": "mango",
+      "task": "instance_segmentation",
+      "source_page": "https://acquire.cqu.edu.au/articles/dataset/On-tree_mango_instance_segmentation_dataset/21655628",
+      "download_url": "https://ndownloader.figshare.com/files/38394074",
+      "license": "CC BY 4.0",
+      "archive_bytes": 206399133,
+      "checksum": {
+        "algorithm": "md5",
+        "value": "96ea1cfd4fe95c26cdb6430cc89beded"
+      },
+      "notes": "COCO masks; 542 canopy tiles plus 1,200 small fruit snips; artificial night lighting; no ripeness labels."
+    },
+    {
+      "id": "mango_branch_segmentation",
+      "title": "On-tree mango-branch instance segmentation dataset",
+      "species": "mango",
+      "task": "instance_segmentation",
+      "source_page": "https://acquire.cqu.edu.au/articles/dataset/on-tree_mango-branch_instance_segmentation_dataset/26212598",
+      "download_url": "https://ndownloader.figshare.com/files/47511947",
+      "license": "CC BY 4.0",
+      "archive_bytes": 90789332,
+      "checksum": {
+        "algorithm": "md5",
+        "value": "e6a98fed9109f17f887ec33f497aff95"
+      },
+      "notes": "250 canopy images with COCO JSON and YOLOv8-seg labels; artificial lighting; no ripeness labels."
+    },
+    {
+      "id": "mango_deep_yield",
+      "title": "Mango deep yield dataset",
+      "species": "mango",
+      "task": "whole_tree_yield_counting",
+      "source_page": "https://acquire.cqu.edu.au/articles/dataset/Mango_deep_yield_dataset_koirala_et_al_2021/14033993",
+      "download_url": "https://ndownloader.figshare.com/files/26469419",
+      "license": "CC BY 4.0",
+      "archive_bytes": 143699568,
+      "checksum": {
+        "algorithm": "md5",
+        "value": "56a47595422ebba6f3d0c8dfe126e677"
+      },
+      "notes": "Dual-view whole-tree imagery mapped to harvest counts; useful as an independent counting benchmark."
+    },
+    {
+      "id": "dragon_fruit_maturity",
+      "title": "Dragon Fruit Maturity Detection Dataset",
+      "species": "dragon_fruit",
+      "task": "image_classification",
+      "source_page": "https://data.mendeley.com/datasets/2jpzbx8tm6/1",
+      "download_url": "https://data.mendeley.com/public-files/datasets/2jpzbx8tm6/files/4a971fd0-07cf-4d88-9109-a8513886c32a/file_downloaded",
+      "license": "CC BY 4.0",
+      "archive_bytes": 1025154230,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "7265501db07c50056a3d4062be44c1f30f98cb039ef4ecbf2a591fccf4fa27fc"
+      },
+      "notes": "Mature/immature classification images, including augmented copies; no detection boxes."
+    },
+    {
+      "id": "dragon_fruit_quality",
+      "title": "Dragon Fruit Quality Grading Dataset",
+      "species": "dragon_fruit",
+      "task": "image_classification",
+      "source_page": "https://data.mendeley.com/datasets/2jpzbx8tm6/1",
+      "download_url": "https://data.mendeley.com/public-files/datasets/2jpzbx8tm6/files/b48bea93-6b57-482b-a6e9-fc35548fc2dd/file_downloaded",
+      "license": "CC BY 4.0",
+      "archive_bytes": 641885391,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "d1a938590a8fa30bdb589f6774a5cfb84382952748ba2f4084439bfd0d5b5766"
+      },
+      "notes": "Fresh/defect classification images, including augmented copies; no detection boxes."
+    }
+  ]
+}

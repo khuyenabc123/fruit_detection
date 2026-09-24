@@ -1,0 +1,208 @@
+{
+  "dataset_root": "data/external/extracted",
+  "datasets": {
+    "dragon_fruit_maturity": {
+      "bytes": 1023984234,
+      "file_count": 7138,
+      "image_count": 7137,
+      "files_by_extension": {
+        ".jpg": 7137,
+        "[no extension]": 1
+      },
+      "images_by_directory": {
+        "Dragon Fruit Maturity Detection Dataset/Augmented Dataset/Immature Dragon Fruit": 3000,
+        "Dragon Fruit Maturity Detection Dataset/Augmented Dataset/Mature Dragon Fruit": 2010,
+        "Dragon Fruit Maturity Detection Dataset/Original Dataset/Immature Dragon Fruit": 1241,
+        "Dragon Fruit Maturity Detection Dataset/Original Dataset/Mature Dragon Fruit": 886
+      }
+    },
+    "dragon_fruit_quality": {
+      "bytes": 654817663,
+      "file_count": 6653,
+      "image_count": 6652,
+      "files_by_extension": {
+        ".jpg": 6652,
+        "[no extension]": 1
+      },
+      "images_by_directory": {
+        "Dragon Fruit Quality Grading Dataset/Augmented Dataset/Defect Dragon Fruit": 3000,
+        "Dragon Fruit Quality Grading Dataset/Augmented Dataset/Fresh Dragon Fruit": 2000,
+        "Dragon Fruit Quality Grading Dataset/Original Dataset/Defect Dragon Fruit": 754,
+        "Dragon Fruit Quality Grading Dataset/Original Dataset/Fresh Dragon Fruit": 898
+      }
+    },
+    "mango_branch_segmentation": {
+      "bytes": 95324335,
+      "file_count": 507,
+      "image_count": 250,
+      "files_by_extension": {
+        ".json": 6,
+        ".png": 250,
+        ".txt": 250,
+        "[no extension]": 1
+      },
+      "images_by_directory": {
+        "mango-branch segmentation dataset/images/test": 50,
+        "mango-branch segmentation dataset/images/train": 200
+      },
+      "coco": [
+        {
+          "file": "mango-branch segmentation dataset/labels/coco-json/test/test_branch_only.json",
+          "images": 50,
+          "annotations": 562,
+          "annotations_by_class": {
+            "branch": 562
+          }
+        },
+        {
+          "file": "mango-branch segmentation dataset/labels/coco-json/test/test_mango_branch.json",
+          "images": 50,
+          "annotations": 865,
+          "annotations_by_class": {
+            "branch": 562,
+            "mango": 303
+          }
+        },
+        {
+          "file": "mango-branch segmentation dataset/labels/coco-json/test/test_mango_only.json",
+          "images": 50,
+          "annotations": 303,
+          "annotations_by_class": {
+            "mango": 303
+          }
+        },
+        {
+          "file": "mango-branch segmentation dataset/labels/coco-json/train/train_branch_only.json",
+          "images": 199,
+          "annotations": 1917,
+          "annotations_by_class": {
+            "branch": 1917
+          }
+        },
+        {
+          "file": "mango-branch segmentation dataset/labels/coco-json/train/train_mango_branch.json",
+          "images": 200,
+          "annotations": 4181,
+          "annotations_by_class": {
+            "branch": 1917,
+            "mango": 2264
+          }
+        },
+        {
+          "file": "mango-branch segmentation dataset/labels/coco-json/train/train_mango_only.json",
+          "images": 200,
+          "annotations": 2264,
+          "annotations_by_class": {
+            "mango": 2264
+          }
+        }
+      ]
+    },
+    "mango_deep_yield": {
+      "bytes": 164358609,
+      "file_count": 339,
+      "image_count": 336,
+      "files_by_extension": {
+        ".jpg": 336,
+        ".txt": 1,
+        ".xlsx": 1,
+        "[no extension]": 1
+      },
+      "images_by_directory": {
+        "deep_yield_dataset/A-2017/sideA": 17,
+        "deep_yield_dataset/A-2017/sideB": 17,
+        "deep_yield_dataset/A-2018/sideA": 17,
+        "deep_yield_dataset/A-2018/sideB": 17,
+        "deep_yield_dataset/A-x/sideA": 44,
+        "deep_yield_dataset/A-x/sideB": 44,
+        "deep_yield_dataset/B-2017/sideA": 6,
+        "deep_yield_dataset/B-2017/sideB": 6,
+        "deep_yield_dataset/B-2018/sideA": 6,
+        "deep_yield_dataset/B-2018/sideB": 6,
+        "deep_yield_dataset/B-x/sideA": 19,
+        "deep_yield_dataset/B-x/sideB": 19,
+        "deep_yield_dataset/C-2017/sideA": 12,
+        "deep_yield_dataset/C-2017/sideB": 12,
+        "deep_yield_dataset/C-2018/sideA": 12,
+        "deep_yield_dataset/C-2018/sideB": 12,
+        "deep_yield_dataset/C-x/sideA": 35,
+        "deep_yield_dataset/C-x/sideB": 35
+      }
+    },
+    "mango_on_tree_segmentation": {
+      "bytes": 209047047,
+      "file_count": 1747,
+      "image_count": 1742,
+      "files_by_extension": {
+        ".json": 4,
+        ".png": 1742,
+        "[no extension]": 1
+      },
+      "images_by_directory": {
+        "mango-segmentation-dataset/individual-mango-snips/test": 120,
+        "mango-segmentation-dataset/individual-mango-snips/train": 1080,
+        "mango-segmentation-dataset/tiled-images/test": 90,
+        "mango-segmentation-dataset/tiled-images/train": 452
+      },
+      "coco": [
+        {
+          "file": "mango-segmentation-dataset/individual-mango-snips/test/test.json",
+          "images": 120,
+          "annotations": 183,
+          "annotations_by_class": {
+            "": 183
+          }
+        },
+        {
+          "file": "mango-segmentation-dataset/individual-mango-snips/train/train.json",
+          "images": 1080,
+          "annotations": 1453,
+          "annotations_by_class": {
+            "": 1453
+          }
+        },
+        {
+          "file": "mango-segmentation-dataset/tiled-images/test/test.json",
+          "images": 90,
+          "annotations": 578,
+          "annotations_by_class": {
+            "mango": 578
+          }
+        },
+        {
+          "file": "mango-segmentation-dataset/tiled-images/train/train.json",
+          "images": 452,
+          "annotations": 4736,
+          "annotations_by_class": {
+            "mango": 4736
+          }
+        }
+      ]
+    },
+    "mango_yolo": {
+      "bytes": 165624851,
+      "file_count": 3468,
+      "image_count": 1731,
+      "files_by_extension": {
+        ".docx": 1,
+        ".jpg": 1730,
+        ".pdf": 1,
+        ".png": 1,
+        ".txt": 4,
+        ".xml": 1730,
+        "[no extension]": 1
+      },
+      "images_by_directory": {
+        ".": 1,
+        "VOCDevkit/VOC2007/JPEGImages": 1730
+      },
+      "pascal_voc": {
+        "annotation_files": 1730,
+        "objects": 15281,
+        "objects_by_class": {
+          "M": 15281
+        }
+      }
+    }
+  }
+}
