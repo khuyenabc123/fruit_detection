@@ -69,13 +69,34 @@ def validate_classifier_dataset(root: Path, species: str) -> None:
         print(f"{species}_classifier/{split}: {counts}")
 
 
+def resume_training(last: Path, best: Path, label: str) -> None:
+    """Resume an interrupted run, or reuse weights from a finished run."""
+    from ultralytics import YOLO
+
+    model = YOLO(str(last))
+    checkpoint = model.ckpt
+    epoch = checkpoint.get("epoch", -1)
+    epochs = checkpoint.get("train_args", {}).get("epochs")
+    # Ultralytics strips the optimizer and sets epoch=-1 when training finishes.
+    finished = epoch == -1 or (epochs is not None and epoch + 1 >= int(epochs))
+    if finished:
+        if not best.is_file():
+            raise FileNotFoundError(f"{label} training finished, but best weights are missing: {best}")
+        print(f"{label} training already finished; using {best} for test and calibration")
+    else:
+        print(f"Resuming {label} from {last}")
+        model.train(resume=True)
+
+
 def train_detector(data_yaml: Path, project: Path, args: argparse.Namespace) -> Path:
     from ultralytics import YOLO
 
     last = project / "detector" / "weights" / "last.pt"
+    best = project / "detector" / "weights" / "best.pt"
     if args.resume and last.is_file():
-        print(f"Resuming detector from {last}")
-        YOLO(str(last)).train(resume=True)
+        resume_training(last, best, "detector")
+    elif args.resume and best.is_file():
+        raise FileNotFoundError(f"Cannot resume detector: {last} is missing. Existing weights: {best}")
     else:
         model = YOLO(args.detector_base)
         model.train(
@@ -104,7 +125,6 @@ def train_detector(data_yaml: Path, project: Path, args: argparse.Namespace) -> 
             workers=args.workers,
             plots=True,
         )
-    best = project / "detector" / "weights" / "best.pt"
     model = YOLO(str(best))
     model.val(
         data=str(data_yaml),
@@ -130,9 +150,11 @@ def train_classifier(
 
     run_name = f"{species}_classifier"
     last = project / run_name / "weights" / "last.pt"
+    best = project / run_name / "weights" / "best.pt"
     if args.resume and last.is_file():
-        print(f"Resuming {species} classifier from {last}")
-        YOLO(str(last)).train(resume=True)
+        resume_training(last, best, f"{species} classifier")
+    elif args.resume and best.is_file():
+        raise FileNotFoundError(f"Cannot resume {species} classifier: {last} is missing. Existing weights: {best}")
     else:
         model = YOLO(args.classifier_base)
         model.train(
@@ -160,7 +182,6 @@ def train_classifier(
             workers=args.workers,
             plots=True,
         )
-    best = project / run_name / "weights" / "best.pt"
     model = YOLO(str(best))
     model.val(
         data=str(dataset_root),
