@@ -37,17 +37,18 @@ for stage in detector mango_classifier dragon_classifier; do
   fi
   total="$(gcloud storage cat "${base}/args.yaml" 2>/dev/null | awk '/^epochs:/ {print $2}')"
   done_flag=""
-  gcloud storage objects describe "${base}/weights/best.pt" >/dev/null 2>&1 && done_flag=" (best.pt saved)"
-  STAGE="${stage}" TOTAL="${total:-?}" FLAG="${done_flag}" python3 -c '
-import csv, io, os, sys
-rows = list(csv.reader(io.StringIO(sys.stdin.read())))
+  gcloud storage objects describe "${base}/weights/best.pt" >/dev/null 2>&1 && done_flag=" (best.pt available)"
+  printf '%s' "${results}" | STAGE="${stage}" TOTAL="${total:-?}" FLAG="${done_flag}" python3 -c "$(cat <<'PY'
+import csv, os, sys
+rows = list(csv.reader(sys.stdin))
 header = [h.strip() for h in rows[0]]
 last = dict(zip(header, (v.strip() for v in rows[-1])))
 keys = [k for k in header if k.startswith("metrics/") or k.endswith("loss")]
-metrics = ", ".join(f"{k.split(chr(47))[-1]}={float(last[k]):.4f}" for k in keys if last.get(k))
-print(f"{os.environ[\"STAGE\"]}: epoch {last[\"epoch\"]}/{os.environ[\"TOTAL\"]}{os.environ[\"FLAG\"]}")
+metrics = ", ".join(f"{k.removeprefix('metrics/')}={float(last[k]):.4f}" for k in keys if last.get(k))
+print(f"{os.environ['STAGE']}: epoch {last['epoch']}/{os.environ['TOTAL']}{os.environ['FLAG']}")
 print(f"    {metrics}")
-' <<< "${results}"
+PY
+)"
 done
 
 echo
