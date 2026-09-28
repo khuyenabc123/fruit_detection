@@ -45,6 +45,12 @@ gcloud storage cp "${CODE_ROOT}"/training/*.py "${CODE_ROOT}/training/requiremen
   "gs://${BUCKET}/${CODE_PREFIX}/training/"
 gcloud storage cp "${SCRIPT_DIR}/vertex_entrypoint.sh" "gs://${BUCKET}/${CODE_PREFIX}/"
 
+# Vertex rejects env vars with empty values, so add this one only when set.
+EXTRA_ENV=""
+if [ -n "${EXTRA_TRAIN_ARGS:-}" ]; then
+  EXTRA_ENV="        - {name: EXTRA_TRAIN_ARGS, value: \"${EXTRA_TRAIN_ARGS}\"}
+"
+fi
 CONFIG="$(mktemp --suffix=.yaml)"
 trap 'rm -f "${CONFIG}"' EXIT
 cat > "${CONFIG}" <<EOF
@@ -65,8 +71,7 @@ workerPoolSpecs:
         - {name: CODE_PREFIX, value: "${CODE_PREFIX}"}
         - {name: RUN_PREFIX, value: "${RUN_PREFIX}"}
         - {name: DATA_OBJECT, value: "${DATA_OBJECT}"}
-        - {name: EXTRA_TRAIN_ARGS, value: "${EXTRA_TRAIN_ARGS:-}"}
-scheduling:
+${EXTRA_ENV}scheduling:
   strategy: SPOT
   timeout: ${TIMEOUT}
 EOF
