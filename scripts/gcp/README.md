@@ -26,14 +26,14 @@ must be stopped manually or it keeps billing).
 your laptop                         Google Cloud (us-central1)
 -----------                         --------------------------
 launch_vertex_training.sh
-  1. tar data/prepared/two_stage_maturity_v2  ->  gs://BUCKET/data/two_stage_maturity_v2.tar   (once, ~2 GB)
+  1. tar data/prepared/two_stage_maturity_v3  ->  gs://BUCKET/data/two_stage_maturity_v3.tar   (once, ~2 GB)
   2. copy training/*.py + entrypoint          ->  gs://BUCKET/code/<timestamp>/                 (frozen snapshot)
   3. gcloud ai custom-jobs create             ->  Vertex AI job (Spot V100, 24 h timeout)
                                                     vertex_entrypoint.sh:
                                                       pip install ultralytics==8.4.155
                                                       untar dataset to local SSD, fix data.yaml path
                                                       python train_two_stage.py --resume
-                                                        -> gs://BUCKET/runs_maturity_v2/{detector,mango_classifier,dragon_classifier}/
+                                                        -> gs://BUCKET/runs_maturity_v3/{detector,mango_classifier,dragon_classifier}/
                                                       job_status.log: STARTED / SETUP / TRAINING / FINISHED|FAILED
                                                     machine is released when the script exits
 ```
@@ -58,7 +58,7 @@ gcloud services enable aiplatform.googleapis.com storage.googleapis.com logging.
 
 Prepare the dataset locally (notebook steps 3-5, or
 `training/prepare_two_stage_data.py`), so that
-`data/prepared/two_stage_maturity_v2/data_readiness.json` exists.
+`data/prepared/two_stage_maturity_v3/data_readiness.json` exists.
 
 Launch:
 
@@ -105,7 +105,7 @@ Without the terminal (e.g. from a phone):
 
 - Console -> **Vertex AI -> Training -> Custom jobs** -> the job -> **View logs**.
 - Console -> **Cloud Storage -> Buckets -> `<project>-fruit-training` ->
-  `runs_maturity_v2/<stage>/`**: `results.csv`, `results.png`, confusion
+  `runs_maturity_v3/<stage>/`**: `results.csv`, `results.png`, confusion
   matrices, `weights/`.
 
 Stop a job early: `gcloud ai custom-jobs cancel <JOB_ID> --region=us-central1`.
@@ -113,7 +113,7 @@ Stop a job early: `gcloud ai custom-jobs cancel <JOB_ID> --region=us-central1`.
 ## Getting the trained weights
 
 ```bash
-B=gs://$(gcloud config get-value project)-fruit-training/runs_maturity_v2
+B=gs://$(gcloud config get-value project)-fruit-training/runs_maturity_v3
 gcloud storage cp $B/detector/weights/best.pt           backend/weights/detector.pt
 gcloud storage cp $B/mango_classifier/weights/best.pt   backend/weights/mango_classifier.pt
 gcloud storage cp $B/mango_classifier/calibration.json  backend/weights/mango_calibration.json
@@ -148,5 +148,5 @@ spend the same credit.
 When finished, remove what you no longer need:
 
 ```bash
-gcloud storage rm -r gs://<bucket>/code gs://<bucket>/data     # keep runs_maturity_v2 (weights)
+gcloud storage rm -r gs://<bucket>/code gs://<bucket>/data     # keep runs_maturity_v3 (weights)
 ```
