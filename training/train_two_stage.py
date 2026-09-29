@@ -13,7 +13,7 @@ from pathlib import Path
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 EXPECTED_DETECTOR_CLASSES = {0: "mango", 1: "dragonfruit"}
 EXPECTED_CLASSIFIER_CLASSES = {
-    "mango": ["mango_premature", "mango_early", "mango_mature", "mango_ripe"],
+    "mango": ["mango_young", "mango_mature", "mango_turning", "mango_ripe"],
     "dragon": ["dragonfruit_unripe", "dragonfruit_ripe", "dragonfruit_rotten"],
 }
 

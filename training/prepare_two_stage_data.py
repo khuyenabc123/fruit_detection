@@ -3,7 +3,7 @@
 
 Outputs:
   detector/            YOLO detection dataset with classes mango/dragonfruit
-  mango_classifier/    ImageFolder dataset with four mango maturity classes
+  mango_classifier/    ImageFolder dataset with four visible mango ripeness stages
   dragon_classifier/   ImageFolder dataset with three dragon-fruit classes
 
 Public datasets without maturity labels are used only for localization. Existing
@@ -34,18 +34,31 @@ from maturity_data import REVISION, audit_prepared_classifier, curate_dragon, re
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 DETECTOR_NAMES = {0: "mango", 1: "dragonfruit"}
-MANGO_CLASS_NAMES = ["mango_premature", "mango_early", "mango_mature", "mango_ripe"]
+# Stages are defined by what a photo shows. The Roboflow export's premature and
+# early-fruit labels are fruit-age stages that look identical, so both are young.
+MANGO_CLASS_NAMES = ["mango_young", "mango_mature", "mango_turning", "mango_ripe"]
 DRAGON_CLASS_NAMES = ["dragonfruit_unripe", "dragonfruit_ripe", "dragonfruit_rotten"]
 ORCHARD_SOURCES = {"dragon_fruit_orchard": 1, "mango_orchard_daylight": 0}
 
 MANGO_RF_MAP = {
-    "premature": "mango_premature",
-    "early-fruit": "mango_early",
-    "early_fruit": "mango_early",
-    "early": "mango_early",
+    "premature": "mango_young",
+    "early-fruit": "mango_young",
+    "early_fruit": "mango_young",
+    "early": "mango_young",
     "mature": "mango_mature",
     "ripe": "mango_ripe",
 }
+# Mendeley mm8g66d7rc post-harvest ripening stages. Stage 1 "Early Ripe" is still
+# green with barely visible yellowing, indistinguishable from Stage 0 in review.
+MANGO_RIPENING_STAGE_MAP = {
+    "stage0": "mango_mature",
+    "stage1": "mango_mature",
+    "stage2": "mango_turning",
+    "stage3": "mango_ripe",
+}
+MANGO_FARFIELD_SUBSETS = ("Far_Field", "Proximal", "Single")
+# Consecutively numbered far-field photos often show the same tree.
+MANGO_FARFIELD_GROUP_SIZE = 10
 DRAGON_RF_MAP = {
     "unripe": "dragonfruit_unripe",
     "immature": "dragonfruit_unripe",
@@ -270,6 +283,54 @@ def load_rf_detection(dataset_dir: Path, species: str) -> list[DetectionExample]
     return examples
 
 
+def load_mango_farfield(external_root: Path) -> list[DetectionExample]:
+    """Mendeley gcgrjvwmm2 on-tree mango photos, including distant small fruit."""
+    root = external_root / "mango_farfield" / "Mango_Dataset"
+    examples = []
+    for subset in MANGO_FARFIELD_SUBSETS:
+        image_dir = root / subset / "images"
+        if not image_dir.is_dir():
+            continue
+        for image_path in sorted(image_dir.iterdir()):
+            if image_path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            label_path = root / subset / "labels" / f"{image_path.stem}.txt"
+            if not label_path.is_file():
+                continue
+            boxes = read_yolo_boxes(label_path)
+            if any(box[0] != 0 for box in boxes):
+                raise ValueError(f"Expected only mango boxes in {label_path}")
+            number = re.search(r"(\d+)$", image_path.stem)
+            block = int(number.group(1)) // MANGO_FARFIELD_GROUP_SIZE if number else image_path.stem
+            examples.append(
+                DetectionExample(
+                    image=image_path,
+                    boxes=tuple(boxes),
+                    source="mango_farfield",
+                    group=f"mango_farfield:{block}",
+                    content_hash=sha256_file(image_path),
+                )
+            )
+    return examples
+
+
+def load_extra_rf_detection(dataset_dir: Path, species: str, source: str) -> list[DetectionExample]:
+    """Additional Roboflow detection export: every box becomes the species box.
+
+    Offline-augmented copies share the name before `.rf.`; keep one per original
+    so augmentation cannot inflate validation/test or leak across splits.
+    """
+    detector_class = 0 if species == "mango" else 1
+    by_group: dict[str, DetectionExample] = {}
+    for image_path, label_path in iter_rf_pairs(dataset_dir):
+        group = rf_group_id(image_path, source)
+        if group in by_group:
+            continue
+        boxes = tuple((detector_class, *box[1:]) for box in read_yolo_boxes(label_path))
+        by_group[group] = DetectionExample(image_path, boxes, source, group, sha256_file(image_path))
+    return list(by_group.values())
+
+
 def load_orchard_detection(external_root: Path, required: bool = False) -> list[DetectionExample]:
     """Load only completed, checked imports; pose labels have already become boxes."""
     examples = []
@@ -366,6 +427,31 @@ def load_dragon_mendeley_originals(external_root: Path) -> list[ClassificationEx
                     source="mendeley_dragon_maturity_original",
                     group=f"dragon_maturity:{image_path.stem}",
                     content_hash=content_hash,
+                )
+            )
+    return examples
+
+
+def load_mango_ripening_stages(external_root: Path) -> list[ClassificationExample]:
+    """Mendeley mm8g66d7rc: one harvested mango per photo, four ripening stages."""
+    root = external_root / "mango_ripening_stages"
+    examples = []
+    for stage, class_name in MANGO_RIPENING_STAGE_MAP.items():
+        if not (root / stage).is_dir():
+            continue
+        for image_path in sorted((root / stage).rglob("*")):
+            if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            # Camera timestamps (IMGyyyymmddHHMMSS): shots within a minute stay together.
+            stamp = re.search(r"(\d{12})\d{2}$", image_path.stem)
+            key = stamp.group(1) if stamp else image_path.stem
+            examples.append(
+                ClassificationExample(
+                    image=image_path,
+                    class_name=class_name,
+                    source="mendeley_mango_ripening",
+                    group=f"mango_ripening:{stage}:{key}",
+                    content_hash=sha256_file(image_path),
                 )
             )
     return examples
@@ -630,7 +716,13 @@ def prepare(args: argparse.Namespace) -> dict:
     detection_examples = load_mango_yolo(args.external_root)
     detection_examples.extend(load_mango_coco_tiles(args.external_root))
     detection_examples.extend(load_orchard_detection(args.external_root, getattr(args, "require_orchard_data", False)))
-    mango_classifier_examples = []
+    detection_examples.extend(load_mango_farfield(args.external_root))
+    for spec in getattr(args, "extra_detection", None) or []:
+        species, source, directory = spec.split(":", 2)
+        if species not in ("mango", "dragonfruit"):
+            raise SystemExit(f"--extra-detection species must be mango or dragonfruit: {spec}")
+        detection_examples.extend(load_extra_rf_detection(Path(directory), species, source))
+    mango_classifier_examples = load_mango_ripening_stages(args.external_root)
     dragon_classifier_examples = []
     dragon_curation = None
 
@@ -665,6 +757,7 @@ def prepare(args: argparse.Namespace) -> dict:
         "data_revision": REVISION,
         "seed": args.seed,
         "detector_source_images": dict(sorted(Counter(example.source for example in detection_examples).items())),
+        "mango_classifier_source_images": dict(sorted(Counter(example.source for example in mango_classifier_examples).items())),
         "rules": {
             "detector_classes": DETECTOR_NAMES,
             "mango_classifier_classes": MANGO_CLASS_NAMES,
@@ -676,6 +769,7 @@ def prepare(args: argparse.Namespace) -> dict:
             "mendeley_augmented_images_used": False,
             "orchard_imports_detector_only": True,
             "dragon_orchard_recordings_balanced_by_frame_count": True,
+            "mango_stage_mapping": {"rf_mango": MANGO_RF_MAP, "mendeley_mango_ripening": MANGO_RIPENING_STAGE_MAP},
         },
         "dragon_curation": dragon_curation,
         "deduplication": {
@@ -731,6 +825,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=("copy", "hardlink", "symlink"), default="copy")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--require-orchard-data", action="store_true", help="Require both checked orchard imports")
+    parser.add_argument(
+        "--extra-detection", action="append", metavar="SPECIES:SOURCE:DIR",
+        help="Extra Roboflow YOLO export used only for detector boxes, e.g. dragonfruit:rf_pitaya_orchard:/path",
+    )
     return parser.parse_args()
 
 

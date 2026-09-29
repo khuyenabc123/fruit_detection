@@ -14,7 +14,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageOps
 
-REVISION = "maturity_v2"
+REVISION = "maturity_v3"
 CLASSES = ["dragonfruit_unripe", "dragonfruit_ripe", "dragonfruit_rotten"]
 SOURCE_LABELS = {"Immature": "dragonfruit_unripe", "Mature": "dragonfruit_ripe"}
 # Trial floors, not statistically established guarantees of dataset sufficiency.
