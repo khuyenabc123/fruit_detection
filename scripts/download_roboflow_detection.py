@@ -13,6 +13,7 @@ import argparse
 import io
 import json
 import os
+import time
 import urllib.parse
 import urllib.request
 import zipfile
@@ -45,10 +46,15 @@ def download(source: str, output_root: Path, key: str) -> dict:
     workspace, project, version, species = SOURCES[source]
     query = urllib.parse.urlencode({"api_key": key})
     info = get_json(f"https://api.roboflow.com/{workspace}/{project}?{query}")
-    export = get_json(f"https://api.roboflow.com/{workspace}/{project}/{version}/yolov8?{query}")
-    link = export.get("export", {}).get("link")
-    if not link:
-        raise RuntimeError(f"{source}: export not ready or not permitted: {list(export)}")
+    # The first request starts generating the export; poll until the link appears.
+    for _ in range(60):
+        export = get_json(f"https://api.roboflow.com/{workspace}/{project}/{version}/yolov8?{query}")
+        link = export.get("export", {}).get("link")
+        if link:
+            break
+        time.sleep(10)
+    else:
+        raise RuntimeError(f"{source}: export not ready after 10 minutes: {list(export)}")
     with urllib.request.urlopen(link, timeout=600) as response:
         payload = response.read()
     destination = output_root / source
