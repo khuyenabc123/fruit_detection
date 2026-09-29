@@ -8,10 +8,11 @@ set -euo pipefail
 : "${CODE_PREFIX:?CODE_PREFIX must be set}"
 GCS_ROOT="/gcs/${BUCKET}"
 CODE_DIR="${GCS_ROOT}/${CODE_PREFIX}"
-RUN_DIR="${GCS_ROOT}/${RUN_PREFIX:-runs_maturity_v2}"
-DATA_TAR="${GCS_ROOT}/${DATA_OBJECT:-data/two_stage_maturity_v2.tar}"
+DATA_NAME="${DATA_NAME:-two_stage_maturity_v3}"
+RUN_DIR="${GCS_ROOT}/${RUN_PREFIX:-runs_maturity_v3}"
+DATA_TAR="${GCS_ROOT}/${DATA_OBJECT:-data/${DATA_NAME}.tar}"
 WORK=/workspace
-DATASET="${WORK}/data/two_stage_maturity_v2"
+DATASET="${WORK}/data/${DATA_NAME}"
 WORKERS="${WORKERS:-6}"
 
 mkdir -p "${RUN_DIR}"

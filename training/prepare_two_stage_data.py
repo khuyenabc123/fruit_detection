@@ -442,15 +442,16 @@ def load_mango_ripening_stages(external_root: Path) -> list[ClassificationExampl
         for image_path in sorted((root / stage).rglob("*")):
             if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
-            # Camera timestamps (IMGyyyymmddHHMMSS): shots within a minute stay together.
-            stamp = re.search(r"(\d{12})\d{2}$", image_path.stem)
-            key = stamp.group(1) if stamp else image_path.stem
+            # Photos were shot every 6-10 s on the same white table; neither timestamps
+            # nor visual hashes separate repeat views of one fruit from different fruit
+            # (reviewed 2026-09-29), so each photo is its own group. Repeat views may
+            # cross splits, making this source's test accuracy somewhat optimistic.
             examples.append(
                 ClassificationExample(
                     image=image_path,
                     class_name=class_name,
                     source="mendeley_mango_ripening",
-                    group=f"mango_ripening:{stage}:{key}",
+                    group=f"mango_ripening:{stage}:{image_path.stem}",
                     content_hash=sha256_file(image_path),
                 )
             )
@@ -770,6 +771,7 @@ def prepare(args: argparse.Namespace) -> dict:
             "orchard_imports_detector_only": True,
             "dragon_orchard_recordings_balanced_by_frame_count": True,
             "mango_stage_mapping": {"rf_mango": MANGO_RF_MAP, "mendeley_mango_ripening": MANGO_RIPENING_STAGE_MAP},
+            "mango_ripening_grouping": "per photo; repeat views of one fruit cannot be identified and may cross splits",
         },
         "dragon_curation": dragon_curation,
         "deduplication": {

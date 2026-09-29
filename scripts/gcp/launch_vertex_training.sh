@@ -14,9 +14,10 @@ REGION="${REGION:-us-central1}"
 BUCKET="${BUCKET:-${PROJECT}-fruit-training}"
 GPU="${GPU:-NVIDIA_TESLA_V100}"
 MACHINE="${MACHINE:-n1-standard-8}"
-DATASET="${DATASET:-${CODE_ROOT}/data/prepared/two_stage_maturity_v2}"
-DATA_OBJECT="data/two_stage_maturity_v2.tar"
-RUN_PREFIX="${RUN_PREFIX:-runs_maturity_v2}"
+DATASET="${DATASET:-${CODE_ROOT}/data/prepared/two_stage_maturity_v3}"
+DATA_NAME="$(basename "${DATASET}")"
+DATA_OBJECT="data/${DATA_NAME}.tar"
+RUN_PREFIX="${RUN_PREFIX:-runs_maturity_v3}"
 # Hard cap on billable time per job, so a stuck job cannot drain credits.
 TIMEOUT="${TIMEOUT:-86400s}"
 IMAGE="us-docker.pkg.dev/vertex-ai/training/pytorch-gpu.2-4.py310:latest"
@@ -71,6 +72,7 @@ workerPoolSpecs:
         - {name: CODE_PREFIX, value: "${CODE_PREFIX}"}
         - {name: RUN_PREFIX, value: "${RUN_PREFIX}"}
         - {name: DATA_OBJECT, value: "${DATA_OBJECT}"}
+        - {name: DATA_NAME, value: "${DATA_NAME}"}
 ${EXTRA_ENV}scheduling:
   strategy: SPOT
   timeout: ${TIMEOUT}

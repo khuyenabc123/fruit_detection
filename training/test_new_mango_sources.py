@@ -26,7 +26,7 @@ class MangoStageMappingTests(unittest.TestCase):
         self.assertEqual(MANGO_RF_MAP["early-fruit"], "mango_young")
         self.assertEqual(set(MANGO_RF_MAP.values()) | {"mango_turning"}, set(MANGO_CLASS_NAMES))
 
-    def test_ripening_stages_map_and_group_by_minute(self):
+    def test_ripening_stages_map_to_visible_classes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             base = root / "mango_ripening_stages"
@@ -41,8 +41,7 @@ class MangoStageMappingTests(unittest.TestCase):
         self.assertEqual(by_name["IMG20200714100000.jpg"].class_name, "mango_mature")
         self.assertEqual(by_name["IMG20200715100000.jpg"].class_name, "mango_turning")
         self.assertEqual(by_name["IMG20200716100000.jpg"].class_name, "mango_ripe")
-        # Two shots in the same minute share a group, so they cannot straddle splits.
-        self.assertEqual(by_name["IMG20200713144302.jpg"].group, by_name["IMG20200713144359.jpg"].group)
+        self.assertEqual(len({example.group for example in examples}), len(examples))
 
 
 class DetectorSourceTests(unittest.TestCase):

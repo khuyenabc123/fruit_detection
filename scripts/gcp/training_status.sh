@@ -6,7 +6,7 @@ set -euo pipefail
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
 BUCKET="${BUCKET:-${PROJECT}-fruit-training}"
-RUN_PREFIX="${RUN_PREFIX:-runs_maturity_v2}"
+RUN_PREFIX="${RUN_PREFIX:-runs_maturity_v3}"
 JOB_ID="${1:-}"
 LOG_LINES="${2:-15}"
 
