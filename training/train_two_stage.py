@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import Counter
@@ -67,6 +68,24 @@ def validate_classifier_dataset(root: Path, species: str) -> None:
                 "The public data alone is insufficient; supply the matching Roboflow dataset."
             )
         print(f"{species}_classifier/{split}: {counts}")
+
+
+def require_maturity_readiness(dataset_root: Path, species: str) -> None:
+    from maturity_data import REVISION
+    path = dataset_root / "data_readiness.json"
+    if not path.is_file():
+        raise ValueError("Missing maturity data audit. Rebuild with the updated notebook steps 3–5.")
+    report = json.loads(path.read_text())
+    if report.get("data_revision") != REVISION:
+        raise ValueError("Stale maturity audit; rerun data preparation.")
+    stage = species + "_classifier"
+    result = report["stages"][stage]
+    manifest = dataset_root / stage / "manifest.csv"
+    if not result["ready_for_training_trial"]:
+        raise ValueError(f"{stage} data is not ready:\n" + "\n".join(result["failures"][:12])
+                         + "\nComplete the missing labeled-data import and rerun steps 4–5. Do not resume old weights.")
+    if not manifest.is_file() or hashlib.sha256(manifest.read_bytes()).hexdigest() != result["manifest_sha256"]:
+        raise ValueError("Classifier manifest changed after its audit; rebuild and audit again.")
 
 
 def resume_training(last: Path, best: Path, label: str) -> None:
@@ -174,6 +193,7 @@ def train_classifier(
             hsv_h=0.0,
             hsv_s=0.35,
             hsv_v=0.25,
+            auto_augment=None,
             degrees=10.0,
             translate=0.08,
             scale=0.25,
@@ -248,12 +268,16 @@ def choose_class_thresholds(
             index
             for index, precision in enumerate(cumulative_precision)
             if index + 1 >= minimum_support and precision >= target_precision
+            # A threshold accepts every prediction tied at that confidence.
+            # Evaluate complete tie groups, not an optimistic partial prefix.
+            and (index == len(order) - 1 or ordered_confidence[index + 1] < ordered_confidence[index])
         ]
         if not valid:
             thresholds[class_name] = 1.0
         else:
             # Largest accepted prefix gives the best coverage at the requested precision.
-            thresholds[class_name] = round(float(ordered_confidence[max(valid)]), 6)
+            # Rounding 0.9999997868 to 1.0 rejected valid dragon-fruit crops.
+            thresholds[class_name] = float(ordered_confidence[max(valid)])
     return thresholds
 
 
@@ -290,7 +314,9 @@ def calibrate_classifier(
         device=args.device,
         verbose=False,
     )
-    probabilities = np.stack([result.probs.data.cpu().numpy() for result in results])
+    # Match backend.two_stage.calibrate_probabilities: float32 can round
+    # confidence to 1.0 while the backend's float64 value remains below it.
+    probabilities = np.stack([result.probs.data.cpu().numpy() for result in results]).astype(np.float64)
     log_probabilities = np.log(np.clip(probabilities, 1e-12, 1.0))
 
     def objective(temperature: float) -> float:
@@ -308,7 +334,7 @@ def calibrate_classifier(
     )
     payload = {
         "weights": str(weights),
-        "temperature": round(temperature, 6),
+        "temperature": temperature,
         "target_precision": args.target_precision,
         "class_names": class_names,
         "class_thresholds": thresholds,
@@ -329,9 +355,14 @@ def run(args: argparse.Namespace) -> dict:
     dragon_root = args.dataset_root / "dragon_classifier"
     args.project.mkdir(parents=True, exist_ok=True)
 
-    validate_detector_dataset(detector_yaml)
-    validate_classifier_dataset(mango_root, "mango")
-    validate_classifier_dataset(dragon_root, "dragon")
+    if not args.skip_detector:
+        validate_detector_dataset(detector_yaml)
+    if not args.skip_mango_classifier:
+        require_maturity_readiness(args.dataset_root, "mango")
+        validate_classifier_dataset(mango_root, "mango")
+    if not args.skip_dragon_classifier:
+        require_maturity_readiness(args.dataset_root, "dragon")
+        validate_classifier_dataset(dragon_root, "dragon")
 
     outputs = {}
     if not args.skip_detector:

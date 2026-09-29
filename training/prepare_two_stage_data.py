@@ -29,12 +29,14 @@ from typing import Iterable
 
 import yaml
 from PIL import Image
+from maturity_data import REVISION, audit_prepared_classifier, curate_dragon, rebalance_classification_groups
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 DETECTOR_NAMES = {0: "mango", 1: "dragonfruit"}
 MANGO_CLASS_NAMES = ["mango_premature", "mango_early", "mango_mature", "mango_ripe"]
 DRAGON_CLASS_NAMES = ["dragonfruit_unripe", "dragonfruit_ripe", "dragonfruit_rotten"]
+ORCHARD_SOURCES = {"dragon_fruit_orchard": 1, "mango_orchard_daylight": 0}
 
 MANGO_RF_MAP = {
     "premature": "mango_premature",
@@ -121,22 +123,41 @@ def iter_rf_pairs(dataset_dir: Path) -> Iterable[tuple[Path, Path]]:
 
 def rf_group_id(image_path: Path, prefix: str) -> str:
     original = image_path.stem.split(".rf.", maxsplit=1)[0]
+    # The dragon Roboflow export includes resized copies of Mendeley originals.
+    # Share a group ID across both sources so they cannot land in different splits.
+    if prefix == "rf_dragonfruit" and re.fullmatch(
+        r"(?:Immature|Mature)_Dragon_Original_Data\d+_jpg", original
+    ):
+        return f"dragon_maturity:{original[:-4]}"
     return f"{prefix}:{original}"
 
 
 def read_yolo_boxes(label_path: Path) -> list[tuple[int, float, float, float, float]]:
+    """Read YOLO boxes and convert YOLO segmentation polygons to enclosing boxes."""
     boxes = []
     if not label_path.is_file():
         return boxes
     for line_number, line in enumerate(label_path.read_text(encoding="utf-8").splitlines(), start=1):
         parts = line.split()
-        if len(parts) < 5:
+        if not parts:
             continue
+        if len(parts) != 5 and (len(parts) < 7 or len(parts) % 2 == 0):
+            raise ValueError(f"Invalid YOLO label shape at {label_path}:{line_number}")
         try:
             class_id = int(float(parts[0]))
-            x, y, w, h = map(float, parts[1:5])
+            values = list(map(float, parts[1:]))
         except ValueError as exc:
             raise ValueError(f"Invalid YOLO label at {label_path}:{line_number}") from exc
+        if not all(0.0 <= value <= 1.0 for value in values):
+            raise ValueError(f"YOLO coordinates outside [0, 1] at {label_path}:{line_number}")
+        if len(parts) == 5:
+            x, y, w, h = values
+        else:
+            xs, ys = values[::2], values[1::2]
+            xmin, xmax = min(xs), max(xs)
+            ymin, ymax = min(ys), max(ys)
+            x, y = (xmin + xmax) / 2, (ymin + ymax) / 2
+            w, h = xmax - xmin, ymax - ymin
         if w <= 0 or h <= 0:
             continue
         boxes.append((class_id, x, y, w, h))
@@ -249,6 +270,44 @@ def load_rf_detection(dataset_dir: Path, species: str) -> list[DetectionExample]
     return examples
 
 
+def load_orchard_detection(external_root: Path, required: bool = False) -> list[DetectionExample]:
+    """Load only completed, checked imports; pose labels have already become boxes."""
+    examples = []
+    for source, species_id in ORCHARD_SOURCES.items():
+        root = external_root / source
+        if not root.exists() and not required:
+            continue
+        report_path, manifest_path = root / "import_report.json", root / "import_manifest.jsonl"
+        if not report_path.is_file() or not manifest_path.is_file():
+            raise ValueError(f"Incomplete orchard import: {root}. Run scripts/download_orchard_datasets.py first.")
+        report = json.loads(report_path.read_text())
+        records = [json.loads(line) for line in manifest_path.read_text().splitlines()]
+        if len(records) != report["selected_images"] or not records:
+            raise ValueError(f"Orchard manifest count mismatch: {root}")
+        if len({record["source_image"] for record in records}) != len(records):
+            raise ValueError(f"Duplicate orchard manifest entries: {root}")
+        count = 0
+        for record in records:
+            image, label = root / record["image"], root / record["label"]
+            if not image.is_file() or not label.is_file() or sha256_file(image) != record["sha256"]:
+                raise ValueError(f"Missing or changed orchard file: {image}")
+            # Require exactly five values: never reinterpret pose keypoints as polygons.
+            if any(len(line.split()) != 5 for line in label.read_text().splitlines() if line.strip()):
+                raise ValueError(f"Expected normalized detector boxes: {label}")
+            boxes = read_yolo_boxes(label)
+            if (any(box[0] != species_id for box in boxes)
+                    or len(boxes) != len(record["boxes"])
+                    or any(abs(a - b) > 1e-7 for box, saved in zip(boxes, record["boxes"]) for a, b in zip(box, saved))):
+                raise ValueError(f"Changed orchard annotations: {label}")
+            if not record["group"].startswith(source + ":"):
+                raise ValueError(f"Invalid orchard group: {record['group']}")
+            examples.append(DetectionExample(image, tuple(boxes), source, record["group"], record["sha256"]))
+            count += len(boxes)
+        if count != report["boxes"]:
+            raise ValueError(f"Orchard annotation count mismatch: {root}")
+    return examples
+
+
 def load_rf_classifier(dataset_dir: Path, species: str, crop_padding: float) -> list[ClassificationExample]:
     id_to_name = load_yaml_names(dataset_dir)
     class_map = MANGO_RF_MAP if species == "mango" else DRAGON_RF_MAP
@@ -267,7 +326,7 @@ def load_rf_classifier(dataset_dir: Path, species: str, crop_padding: float) -> 
             ymin = max(0, round(height * (y - h / 2) - pad_h))
             xmax = min(width, round(width * (x + w / 2) + pad_w))
             ymax = min(height, round(height * (y + h / 2) + pad_h))
-            if xmax - xmin < 8 or ymax - ymin < 8:
+            if xmax - xmin < 64 or ymax - ymin < 64:
                 continue
             examples.append(
                 ClassificationExample(
@@ -305,7 +364,7 @@ def load_dragon_mendeley_originals(external_root: Path) -> list[ClassificationEx
                     image=image_path,
                     class_name=class_name,
                     source="mendeley_dragon_maturity_original",
-                    group=f"mendeley:{content_hash}",
+                    group=f"dragon_maturity:{image_path.stem}",
                     content_hash=content_hash,
                 )
             )
@@ -363,6 +422,22 @@ def assign_group_splits(
     for stratum, groups in sorted(strata.items(), key=lambda item: str(item[0])):
         rng = random.Random(f"{seed}:{stratum}")
         rng.shuffle(groups)
+        if not classification and stratum[0] == "dragon_fruit_orchard":
+            # Recording lengths differ greatly (23 to 505 frames). Counting
+            # groups equally can leave validation with just the shortest clip.
+            # Allocate larger recordings first to the largest frame deficit.
+            total_images = sum(len(group_examples[group]) for group in groups)
+            assigned_images = Counter()
+            split_order = list(split_ratios)
+            rng.shuffle(split_order)
+            for group in sorted(groups, key=lambda item: len(group_examples[item]), reverse=True):
+                split_name = max(
+                    split_order,
+                    key=lambda split: total_images * split_ratios[split] - assigned_images[split],
+                )
+                assignments[group] = split_name
+                assigned_images[split_name] += len(group_examples[group])
+            continue
         total = len(groups)
         cursor = 0
         split_names = list(split_ratios)
@@ -375,6 +450,8 @@ def assign_group_splits(
                 cursor = end
             for group in selected:
                 assignments[group] = split_name
+    if classification:
+        return rebalance_classification_groups(group_examples, assignments)
     return assignments
 
 
@@ -468,13 +545,20 @@ def materialize_classifier(
         classification=True,
     )
 
-    # Offline Roboflow augmentation variants remain useful for training, but one
-    # variant per original group is enough for validation/calibration/test.
+    # Keep one image per original group outside training. Prefer the unmodified
+    # Mendeley original over a Roboflow resize or augmentation of the same image.
     canonical_nontrain_image = {}
+    image_classes = defaultdict(set)
     for example in examples:
-        if assignments[example.group] != "train" and example.source.startswith("rf_"):
+        image_classes[example.image].add(example.class_name)
+    for example in examples:
+        if assignments[example.group] != "train":
             current = canonical_nontrain_image.get(example.group)
-            candidate = example.image.as_posix()
+            candidate = (
+                0 if example.source == "mendeley_dragon_maturity_original" else 1,
+                -len(image_classes[example.image]),
+                example.image.as_posix(),
+            )
             if current is None or candidate < current:
                 canonical_nontrain_image[example.group] = candidate
 
@@ -486,7 +570,7 @@ def materialize_classifier(
     ):
         split = assignments[example.group]
         canonical = canonical_nontrain_image.get(example.group)
-        if canonical is not None and example.image.as_posix() != canonical:
+        if canonical is not None and example.image.as_posix() != canonical[-1]:
             stats["skipped_nontrain_augmented_variants"] += 1
             continue
         stem = f"{safe_slug(example.source)}_{example.content_hash[:16]}_{example.crop_index:03d}"
@@ -545,30 +629,55 @@ def prepare(args: argparse.Namespace) -> dict:
 
     detection_examples = load_mango_yolo(args.external_root)
     detection_examples.extend(load_mango_coco_tiles(args.external_root))
+    detection_examples.extend(load_orchard_detection(args.external_root, getattr(args, "require_orchard_data", False)))
     mango_classifier_examples = []
-    dragon_classifier_examples = load_dragon_mendeley_originals(args.external_root)
+    dragon_classifier_examples = []
+    dragon_curation = None
 
     if args.mango_rf:
         detection_examples.extend(load_rf_detection(args.mango_rf, "mango"))
         mango_classifier_examples.extend(load_rf_classifier(args.mango_rf, "mango", args.crop_padding))
     if args.dragon_rf:
-        detection_examples.extend(load_rf_detection(args.dragon_rf, "dragonfruit"))
-        dragon_classifier_examples.extend(load_rf_classifier(args.dragon_rf, "dragonfruit", args.crop_padding))
+        black_rot_root = getattr(args, "dragon_black_rot", None) or args.external_root / "dragon_fruit_black_rot"
+        curated, detector_boxes, dragon_curation = curate_dragon(
+            list(iter_rf_pairs(args.dragon_rf)), load_yaml_names(args.dragon_rf), read_yolo_boxes,
+            black_rot_root, output / "maturity_audit", args.crop_padding,
+        )
+        image_hashes = {row["image"]: row["sha256"] for row in curated}
+        for image_name, boxes in detector_boxes.items():
+            image_path = Path(image_name)
+            detection_examples.append(DetectionExample(
+                image_path, tuple((1, *box[1:]) for box in boxes), "rf_dragonfruit_curated",
+                rf_group_id(image_path, "rf_dragonfruit"), image_hashes.get(image_name) or sha256_file(image_path),
+            ))
+        dragon_classifier_examples = [ClassificationExample(
+            image=Path(row["image"]), class_name=row["class_name"], source=row["source"],
+            group=row["group"], content_hash=row["sha256"],
+            crop_xyxy=tuple(row["crop_xyxy"]) if row["crop_xyxy"] else None,
+            crop_index=row["crop_index"],
+        ) for row in curated]
 
     detection_examples, detector_duplicates = deduplicate_detection(detection_examples)
     mango_classifier_examples, mango_duplicates = deduplicate_classification(mango_classifier_examples)
     dragon_classifier_examples, dragon_duplicates = deduplicate_classification(dragon_classifier_examples)
 
     report = {
+        "data_revision": REVISION,
         "seed": args.seed,
+        "detector_source_images": dict(sorted(Counter(example.source for example in detection_examples).items())),
         "rules": {
             "detector_classes": DETECTOR_NAMES,
             "mango_classifier_classes": MANGO_CLASS_NAMES,
             "dragon_classifier_classes": DRAGON_CLASS_NAMES,
-            "dragon_quality_dataset_used": False,
-            "reason": "fresh/defect is not equivalent to ripe/rotten",
+            "standalone_dragon_quality_archive_used": False,
+            "unreviewed_quality_labels_used_for_maturity": False,
+            "classifier_minimum_crop_edge": 64,
+            "dragon_classifier_uses_only_curated_subjects": True,
             "mendeley_augmented_images_used": False,
+            "orchard_imports_detector_only": True,
+            "dragon_orchard_recordings_balanced_by_frame_count": True,
         },
+        "dragon_curation": dragon_curation,
         "deduplication": {
             "detector_exact_duplicates_removed": detector_duplicates,
             "mango_classifier_duplicates_removed": mango_duplicates,
@@ -595,6 +704,15 @@ def prepare(args: argparse.Namespace) -> dict:
 
     for manifest in output.rglob("manifest.csv"):
         assert_no_group_leakage(manifest)
+    readiness = {"data_revision": REVISION, "stages": {
+        "mango_classifier": audit_prepared_classifier(output / "mango_classifier", MANGO_CLASS_NAMES),
+        "dragon_classifier": audit_prepared_classifier(output / "dragon_classifier", DRAGON_CLASS_NAMES),
+    }, "field_evaluation": "Pending evaluation on independently collected target-orchard photos; automatic checks cannot certify all labels."}
+    for stage in readiness["stages"]:
+        manifest = output / stage / "manifest.csv"
+        readiness["stages"][stage]["manifest_sha256"] = sha256_file(manifest) if manifest.is_file() else None
+    (output / "data_readiness.json").write_text(json.dumps(readiness, indent=2) + "\n")
+    report["maturity_ready_for_training_trial"] = {stage: audit["ready_for_training_trial"] for stage, audit in readiness["stages"].items()}
     (output / "preparation_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
@@ -606,11 +724,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--external-root", type=Path, default=Path("data/external/extracted"))
     parser.add_argument("--mango-rf", type=Path, help="Extracted mango Roboflow dataset directory")
     parser.add_argument("--dragon-rf", type=Path, help="Extracted dragon-fruit Roboflow dataset directory")
+    parser.add_argument("--dragon-black-rot", type=Path, help="Checked original DF-MOD Black_Rot import")
     parser.add_argument("--output", type=Path, default=Path("data/prepared/two_stage"))
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--crop-padding", type=float, default=0.10)
     parser.add_argument("--mode", choices=("copy", "hardlink", "symlink"), default="copy")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument("--require-orchard-data", action="store_true", help="Require both checked orchard imports")
     return parser.parse_args()
 
 

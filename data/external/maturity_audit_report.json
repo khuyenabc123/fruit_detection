@@ -1,0 +1,272 @@
+{
+  "date": "2026-09-28",
+  "data_revision": "maturity_v2",
+  "rotten_definition": "visible spoilage/decay; generic defect is not automatically rotten",
+  "source_audit": {
+    "revision": "maturity_v2",
+    "rotten_definition": "visible spoilage/decay; fruit Black_Rot accepted, generic Defect excluded",
+    "source_annotation_inventory": {
+      "Defect": {
+        "rotten": 1444
+      },
+      "Fresh": {
+        "ripe": 943,
+        "unripe": 64,
+        "rotten": 11
+      },
+      "Immature": {
+        "unripe": 841,
+        "rotten": 1
+      },
+      "Mature": {
+        "ripe": 816,
+        "unripe": 100,
+        "rotten": 44
+      }
+    },
+    "box_flags": {
+      "boxes_below_one_percent_area": 703,
+      "maturity_source_label_conflicts": 145
+    },
+    "invalid_files": [],
+    "candidate_images": 3682,
+    "accepted_class_images": {
+      "dragonfruit_unripe": 611,
+      "dragonfruit_ripe": 584,
+      "dragonfruit_rotten": 675
+    },
+    "accepted_class_groups": {
+      "dragonfruit_unripe": 581,
+      "dragonfruit_ripe": 464,
+      "dragonfruit_rotten": 267
+    },
+    "quarantine_reasons": {
+      "quality_label_is_not_a_verified_maturity_label": 1406,
+      "disjoint_annotations_need_review": 332,
+      "small_or_narrow_subject": 23,
+      "missing_boxes": 2,
+      "dominant_label_conflicts_with_source": 49
+    },
+    "rf_detector_images_kept": 2650,
+    "rf_detector_boxes_kept": 2650,
+    "black_rot_reviewed_view_groups": 3,
+    "clustering": {
+      "near_copy_pairs_grouped": 998,
+      "conflicting_candidates_quarantined": 0
+    },
+    "missing_supplement": null,
+    "limitations": [
+      "Automatic filtering and source agreement are not expert review of every label.",
+      "Visual near-copy grouping is heuristic; distinct views of the same fruit may remain.",
+      "No target-orchard accuracy guarantee. Black rot covers one spoilage condition only.",
+      "Uncropped legacy maturity originals excluded: RF counterparts supply isolated subject crops."
+    ]
+  },
+  "prepared_images": {
+    "detector": 10438,
+    "mango_classifier": 2534,
+    "dragon_classifier": 1416
+  },
+  "readiness": {
+    "data_revision": "maturity_v2",
+    "stages": {
+      "mango_classifier": {
+        "ready_for_training_trial": true,
+        "counts": {
+          "train/mango_premature": {
+            "images": 604,
+            "source_groups": 172,
+            "minimum_groups": 80
+          },
+          "train/mango_early": {
+            "images": 480,
+            "source_groups": 92,
+            "minimum_groups": 80
+          },
+          "train/mango_mature": {
+            "images": 591,
+            "source_groups": 166,
+            "minimum_groups": 80
+          },
+          "train/mango_ripe": {
+            "images": 360,
+            "source_groups": 161,
+            "minimum_groups": 80
+          },
+          "val/mango_premature": {
+            "images": 62,
+            "source_groups": 39,
+            "minimum_groups": 20
+          },
+          "val/mango_early": {
+            "images": 44,
+            "source_groups": 24,
+            "minimum_groups": 20
+          },
+          "val/mango_mature": {
+            "images": 65,
+            "source_groups": 39,
+            "minimum_groups": 20
+          },
+          "val/mango_ripe": {
+            "images": 47,
+            "source_groups": 37,
+            "minimum_groups": 20
+          },
+          "calib/mango_premature": {
+            "images": 44,
+            "source_groups": 27,
+            "minimum_groups": 20
+          },
+          "calib/mango_early": {
+            "images": 32,
+            "source_groups": 20,
+            "minimum_groups": 20
+          },
+          "calib/mango_mature": {
+            "images": 36,
+            "source_groups": 25,
+            "minimum_groups": 20
+          },
+          "calib/mango_ripe": {
+            "images": 25,
+            "source_groups": 25,
+            "minimum_groups": 20
+          },
+          "test/mango_premature": {
+            "images": 47,
+            "source_groups": 26,
+            "minimum_groups": 20
+          },
+          "test/mango_early": {
+            "images": 33,
+            "source_groups": 20,
+            "minimum_groups": 20
+          },
+          "test/mango_mature": {
+            "images": 39,
+            "source_groups": 26,
+            "minimum_groups": 20
+          },
+          "test/mango_ripe": {
+            "images": 25,
+            "source_groups": 25,
+            "minimum_groups": 20
+          }
+        },
+        "failures": [],
+        "threshold_scope": "Conservative trial floors; not a guarantee of statistical precision or field accuracy.",
+        "manifest_sha256": "162333bc11255d4be4b17bef5edd8342b9120d1c548fde6b2591d561551febf0"
+      },
+      "dragon_classifier": {
+        "ready_for_training_trial": true,
+        "counts": {
+          "train/dragonfruit_unripe": {
+            "images": 396,
+            "source_groups": 378,
+            "minimum_groups": 80
+          },
+          "train/dragonfruit_ripe": {
+            "images": 387,
+            "source_groups": 302,
+            "minimum_groups": 80
+          },
+          "train/dragonfruit_rotten": {
+            "images": 175,
+            "source_groups": 174,
+            "minimum_groups": 80
+          },
+          "val/dragonfruit_unripe": {
+            "images": 87,
+            "source_groups": 87,
+            "minimum_groups": 20
+          },
+          "val/dragonfruit_ripe": {
+            "images": 69,
+            "source_groups": 69,
+            "minimum_groups": 20
+          },
+          "val/dragonfruit_rotten": {
+            "images": 40,
+            "source_groups": 40,
+            "minimum_groups": 20
+          },
+          "calib/dragonfruit_unripe": {
+            "images": 58,
+            "source_groups": 58,
+            "minimum_groups": 20
+          },
+          "calib/dragonfruit_ripe": {
+            "images": 47,
+            "source_groups": 47,
+            "minimum_groups": 20
+          },
+          "calib/dragonfruit_rotten": {
+            "images": 26,
+            "source_groups": 26,
+            "minimum_groups": 20
+          },
+          "test/dragonfruit_unripe": {
+            "images": 58,
+            "source_groups": 58,
+            "minimum_groups": 20
+          },
+          "test/dragonfruit_ripe": {
+            "images": 46,
+            "source_groups": 46,
+            "minimum_groups": 20
+          },
+          "test/dragonfruit_rotten": {
+            "images": 27,
+            "source_groups": 27,
+            "minimum_groups": 20
+          }
+        },
+        "failures": [],
+        "threshold_scope": "Conservative trial floors; not a guarantee of statistical precision or field accuracy.",
+        "manifest_sha256": "aa76b7a9c02992c1d307a0b699c2c644f848bee1f2bd653fc8b47ee82a6662cc"
+      }
+    },
+    "field_evaluation": "Pending evaluation on independently collected target-orchard photos; automatic checks cannot certify all labels."
+  },
+  "black_rot_supplement": {
+    "source": "https://data.mendeley.com/datasets/kpsywfwkrf/1",
+    "publisher_original_images": 675,
+    "downloaded_files": 675,
+    "unique_images": 270,
+    "exact_duplicates_removed": 405,
+    "reviewed_view_pairs_grouped": 3,
+    "visual_groups_after_review": 267,
+    "prepared_images": 268,
+    "license": "CC BY 4.0",
+    "local_status": "DOWNLOADED AND VERIFIED; original images checked against publisher size/SHA256 and decoded",
+    "folder_path": "Dragon Fruit/Fruit/Black_Rot",
+    "notebook_action": "Step 3B imports individual original files, excludes Balanced folder, verifies publisher checksums, and caches them. Steps 4\u20135 curate, deduplicate, group, split and audit before 6C.",
+    "testing": "Live import and complete local preparation succeeded; re-running downloader verifies existing files without redownloading. All 270 distinct images screened at contact-sheet resolution; three related pairs inspected larger and grouped.",
+    "visual_review": "data/external/extracted/dragon_fruit_black_rot/review/visual_review.json",
+    "metadata_discrepancy": "Downloaded images are 1080x1920, 1920x1080 or 1080x1440; publisher description advertises 2268x4032. Actual dimensions recorded per file."
+  },
+  "verification": [
+    "All 675 Black_Rot files passed publisher size and SHA256 verification and image decoding",
+    "405 exact Black_Rot duplicates removed during preparation",
+    "270 distinct Black_Rot images visually screened in contact sheets; not expert diagnosis",
+    "Three confirmed repeated-view pairs kept within a split; only one variant retained outside training",
+    "Full local preparation completed",
+    "Class coverage and group splits checked",
+    "Decoded crop duplicates and label conflicts checked",
+    "Mango and dragon readiness gates passed on the final dataset",
+    "Detector class/split validation passed",
+    "22 regression tests passed",
+    "Notebook cells parse; embedded helpers match current source",
+    "No GPU training performed"
+  ],
+  "saved_dataset": "data/prepared/two_stage_maturity_v2",
+  "notebook": "training/train_two_stage_colab.ipynb",
+  "limitations": [
+    "Automatic gates and visual screening do not prove all labels correct or rule out data as a cause of future errors.",
+    "Near-copy grouping is heuristic; source capture/fruit identities are unavailable and further repeated views may remain.",
+    "Black rot is one disease; broad spoilage coverage remains unproven.",
+    "Ripeness at small detection crop sizes and accuracy on the target orchard remain untested.",
+    "Prepared counts include training variants and are not counts of independent fruits; classifier trial minimums are not statistical guarantees."
+  ]
+}

@@ -6,8 +6,8 @@ raw_dir="${PUBLIC_DATA_RAW_DIR:-${project_dir}/data/external/raw}"
 extracted_dir="${PUBLIC_DATA_EXTRACTED_DIR:-${project_dir}/data/external/extracted}"
 profile="${1:-all}"
 
-if [[ "${profile}" != "all" && "${profile}" != "two-stage-minimal" ]]; then
-  echo "Usage: $0 [all|two-stage-minimal]" >&2
+if [[ "${profile}" != "all" && "${profile}" != "two-stage-minimal" && "${profile}" != "two-stage-curated" ]]; then
+  echo "Usage: $0 [all|two-stage-minimal|two-stage-curated]" >&2
   exit 2
 fi
 
@@ -102,12 +102,14 @@ if [[ "${profile}" == "all" ]]; then
     "56a47595422ebba6f3d0c8dfe126e677"
 fi
 
+if [[ "${profile}" != "two-stage-curated" ]]; then
 download_and_verify \
   "Dragon fruit maturity classification" \
   "https://data.mendeley.com/public-files/datasets/2jpzbx8tm6/files/4a971fd0-07cf-4d88-9109-a8513886c32a/file_downloaded" \
   "dragon_fruit_maturity.zip" \
   "sha256" \
   "7265501db07c50056a3d4062be44c1f30f98cb039ef4ecbf2a591fccf4fa27fc"
+fi
 
 if [[ "${profile}" == "all" ]]; then
   download_and_verify \
@@ -126,7 +128,9 @@ fi
 if [[ "${profile}" == "all" ]]; then
   extract_once "mango_deep_yield.zip" "mango_deep_yield"
 fi
-extract_once "dragon_fruit_maturity.zip" "dragon_fruit_maturity"
+if [[ "${profile}" != "two-stage-curated" ]]; then
+  extract_once "dragon_fruit_maturity.zip" "dragon_fruit_maturity"
+fi
 if [[ "${profile}" == "all" ]]; then
   extract_once "dragon_fruit_quality.zip" "dragon_fruit_quality"
 fi
