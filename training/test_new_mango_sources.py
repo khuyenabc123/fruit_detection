@@ -9,7 +9,9 @@ from PIL import Image
 from prepare_two_stage_data import (
     MANGO_CLASS_NAMES,
     MANGO_RF_MAP,
+    drop_cross_source_copies,
     load_extra_rf_detection,
+    load_negative_images,
     load_mango_farfield,
     load_mango_ripening_stages,
 )
@@ -18,6 +20,17 @@ from prepare_two_stage_data import (
 def write_image(path: Path, color=(0, 128, 0)) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (80, 80), color).save(path)
+
+
+def write_noise_image(path: Path, seed: int) -> None:
+    """Distinct texture per seed, so visual hashes differ like real photos do."""
+    import random
+
+    rng = random.Random(seed)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (80, 80))
+    image.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256)) for _ in range(80 * 80)])
+    image.save(path)
 
 
 class MangoStageMappingTests(unittest.TestCase):
@@ -71,6 +84,26 @@ class DetectorSourceTests(unittest.TestCase):
             examples = load_extra_rf_detection(root, "dragonfruit", "rf_pitaya")
         self.assertEqual(len(examples), 2)
         self.assertTrue(all(box[0] == 1 for example in examples for box in example.boxes))
+
+
+class CrossSourceTests(unittest.TestCase):
+    def test_reuploaded_photo_is_kept_once_and_negatives_have_no_boxes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # Same upload name in two projects = one photo; different pixels on purpose.
+            for source, name, seed in (("a", "plant1_jpg.rf.x1", 1), ("b", "plant1_jpg.rf.y2", 2),
+                                       ("b", "other_jpg.rf.z3", 3)):
+                write_noise_image(root / source / "train/images" / f"{name}.jpg", seed)
+                (root / source / "train/labels").mkdir(parents=True, exist_ok=True)
+                (root / source / "train/labels" / f"{name}.txt").write_text("0 0.5 0.5 0.2 0.2\n")
+            write_noise_image(root / "lychee/tree.jpg", 4)
+            first = load_extra_rf_detection(root / "a", "dragonfruit", "rf_a")
+            second = load_extra_rf_detection(root / "b", "dragonfruit", "rf_b")
+            negatives = load_negative_images(root / "lychee", "neg_lychee")
+            kept, dropped = drop_cross_source_copies([first, second, negatives])
+        self.assertEqual(dropped, {"rf_b": 1})
+        self.assertEqual(sorted(e.source for e in kept), ["neg_lychee", "rf_a", "rf_b"])
+        self.assertEqual([e.boxes for e in kept if e.source == "neg_lychee"], [()])
 
 
 if __name__ == "__main__":

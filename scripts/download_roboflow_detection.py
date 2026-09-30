@@ -24,6 +24,7 @@ SOURCES = {
     "rf_mango_tree": ("jerng-mi", "mango-tree-rya7c", 1, "mango"),
     "rf_pitaya_orchard": ("pitaya-2jhyv", "goodgoodgood", 8, "dragonfruit"),
     "rf_ripe_dragon_plants": ("training-dwctq", "ripe-dragon-fruits", 1, "dragonfruit"),
+    "rf_thanh_long": ("thanh-long-v1", "thanh-long-detection-znzlc", 4, "dragonfruit"),
 }
 
 

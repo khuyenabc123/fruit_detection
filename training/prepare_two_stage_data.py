@@ -331,6 +331,49 @@ def load_extra_rf_detection(dataset_dir: Path, species: str, source: str) -> lis
     return list(by_group.values())
 
 
+def load_negative_images(directory: Path, source: str) -> list[DetectionExample]:
+    """Background images of other fruit/flowers: empty labels teach "not mango/dragon"."""
+    by_group: dict[str, DetectionExample] = {}
+    for image_path in sorted(directory.rglob("*")):
+        if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
+            continue
+        group = rf_group_id(image_path, source)
+        if group not in by_group:
+            by_group[group] = DetectionExample(image_path, (), source, group, sha256_file(image_path))
+    return list(by_group.values())
+
+
+def drop_cross_source_copies(sources: list[list[DetectionExample]]) -> tuple[list[DetectionExample], dict[str, int]]:
+    """Roboflow projects re-upload each other's photos. Keep the first copy seen,
+    matched by original upload name or a near-identical visual hash, so one photo
+    cannot appear in two sources and straddle splits."""
+    import numpy as np
+
+    from maturity_data import fingerprint
+
+    kept: list[DetectionExample] = []
+    dropped: Counter = Counter()
+    seen_stems: set[str] = set()
+    seen_hashes = np.zeros(0, dtype=np.uint64)
+    for examples in sources:
+        new_hashes = []
+        for example in examples:
+            stem = example.image.stem.split(".rf.", maxsplit=1)[0]
+            with Image.open(example.image) as image:
+                bits = np.uint64(fingerprint(image.convert("RGB"))[0])
+            near = seen_hashes.size and int(
+                (np.unpackbits((seen_hashes ^ bits).view(np.uint8)).reshape(-1, 64).sum(axis=1) <= 4).any()
+            )
+            if stem in seen_stems or near:
+                dropped[example.source] += 1
+                continue
+            seen_stems.add(stem)
+            new_hashes.append(bits)
+            kept.append(example)
+        seen_hashes = np.concatenate([seen_hashes, np.array(new_hashes, dtype=np.uint64)])
+    return kept, dict(dropped)
+
+
 def load_orchard_detection(external_root: Path, required: bool = False) -> list[DetectionExample]:
     """Load only completed, checked imports; pose labels have already become boxes."""
     examples = []
@@ -718,11 +761,17 @@ def prepare(args: argparse.Namespace) -> dict:
     detection_examples.extend(load_mango_coco_tiles(args.external_root))
     detection_examples.extend(load_orchard_detection(args.external_root, getattr(args, "require_orchard_data", False)))
     detection_examples.extend(load_mango_farfield(args.external_root))
+    extra_sources = []
     for spec in getattr(args, "extra_detection", None) or []:
         species, source, directory = spec.split(":", 2)
         if species not in ("mango", "dragonfruit"):
             raise SystemExit(f"--extra-detection species must be mango or dragonfruit: {spec}")
-        detection_examples.extend(load_extra_rf_detection(Path(directory), species, source))
+        extra_sources.append(load_extra_rf_detection(Path(directory), species, source))
+    for spec in getattr(args, "negative", None) or []:
+        source, directory = spec.split(":", 1)
+        extra_sources.append(load_negative_images(Path(directory), source))
+    extra_examples, cross_source_copies = drop_cross_source_copies(extra_sources)
+    detection_examples.extend(extra_examples)
     mango_classifier_examples = load_mango_ripening_stages(args.external_root)
     dragon_classifier_examples = []
     dragon_curation = None
@@ -776,6 +825,7 @@ def prepare(args: argparse.Namespace) -> dict:
         "dragon_curation": dragon_curation,
         "deduplication": {
             "detector_exact_duplicates_removed": detector_duplicates,
+            "extra_source_cross_copies_removed": cross_source_copies,
             "mango_classifier_duplicates_removed": mango_duplicates,
             "dragon_classifier_duplicates_removed": dragon_duplicates,
         },
@@ -830,6 +880,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extra-detection", action="append", metavar="SPECIES:SOURCE:DIR",
         help="Extra Roboflow YOLO export used only for detector boxes, e.g. dragonfruit:rf_pitaya_orchard:/path",
+    )
+    parser.add_argument(
+        "--negative", action="append", metavar="SOURCE:DIR",
+        help="Folder of images with no mango/dragon fruit (other fruit, flowers); added to the detector with empty labels",
     )
     return parser.parse_args()
 
