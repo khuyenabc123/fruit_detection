@@ -88,11 +88,51 @@ def require_maturity_readiness(dataset_root: Path, species: str) -> None:
         raise ValueError("Classifier manifest changed after its audit; rebuild and audit again.")
 
 
+FP16_MAX = 65504.0
+
+
+def save_fp32_best(trainer) -> None:
+    """Ultralytics saves best.pt in fp16. BatchNorm variances above 65504 are then
+    clipped, which broke the maturity_v4 detector (bogus full-image boxes at
+    100% confidence). Keep a float32 copy of the same EMA weights alongside it."""
+    import copy
+
+    import torch
+
+    if trainer.best_fitness == trainer.fitness:
+        torch.save({"model": copy.deepcopy(trainer.ema.ema).float(), "train_args": vars(trainer.args), "epoch": -1},
+                   trainer.wdir / "best_fp32.pt")
+
+
+def saturated_batchnorm(weights: Path) -> list[str]:
+    import torch
+
+    model = torch.load(weights, map_location="cpu", weights_only=False)["model"]
+    # Only fp16 storage clips; large variances in a float32 file are genuine.
+    return [name for name, module in model.named_modules()
+            if isinstance(module, torch.nn.BatchNorm2d) and module.running_var.dtype == torch.float16
+            and float(module.running_var.max()) >= FP16_MAX * 0.999]
+
+
+def usable_best(best: Path) -> Path:
+    """Return best.pt, or its float32 copy when fp16 saving clipped BatchNorm statistics."""
+    clipped = saturated_batchnorm(best)
+    if not clipped:
+        return best
+    fp32 = best.with_name("best_fp32.pt")
+    if fp32.is_file() and not saturated_batchnorm(fp32):
+        print(f"{best} has BatchNorm variance clipped at the fp16 maximum ({clipped}); using {fp32}")
+        return fp32
+    raise ValueError(f"{best} has BatchNorm variance clipped at the fp16 maximum in {clipped} and no float32 copy exists. "
+                     "Repair it with scripts/repair_batchnorm_fp16.py before using it.")
+
+
 def resume_training(last: Path, best: Path, label: str) -> None:
     """Resume an interrupted run, or reuse weights from a finished run."""
     from ultralytics import YOLO
 
     model = YOLO(str(last))
+    model.add_callback("on_model_save", save_fp32_best)
     checkpoint = model.ckpt
     epoch = checkpoint.get("epoch", -1)
     epochs = checkpoint.get("train_args", {}).get("epochs")
@@ -118,6 +158,7 @@ def train_detector(data_yaml: Path, project: Path, args: argparse.Namespace) -> 
         raise FileNotFoundError(f"Cannot resume detector: {last} is missing. Existing weights: {best}")
     else:
         model = YOLO(args.detector_base)
+        model.add_callback("on_model_save", save_fp32_best)
         model.train(
             data=str(data_yaml),
             epochs=args.detector_epochs,
@@ -144,6 +185,7 @@ def train_detector(data_yaml: Path, project: Path, args: argparse.Namespace) -> 
             workers=args.workers,
             plots=True,
         )
+    best = usable_best(best)
     model = YOLO(str(best))
     model.val(
         data=str(data_yaml),
@@ -176,6 +218,7 @@ def train_classifier(
         raise FileNotFoundError(f"Cannot resume {species} classifier: {last} is missing. Existing weights: {best}")
     else:
         model = YOLO(args.classifier_base)
+        model.add_callback("on_model_save", save_fp32_best)
         model.train(
             data=str(dataset_root),
             epochs=args.classifier_epochs,
@@ -202,6 +245,7 @@ def train_classifier(
             workers=args.workers,
             plots=True,
         )
+    best = usable_best(best)
     model = YOLO(str(best))
     model.val(
         data=str(dataset_root),
