@@ -22,6 +22,9 @@ MASTER_CLASS_IDS = {
     "dragonfruit_rotten": 6,
     "mango_uncertain": 7,
     "dragonfruit_uncertain": 8,
+    # maturity_v3 visible-stage mango classifier (premature/early merged into young).
+    "mango_young": 9,
+    "mango_turning": 10,
 }
 
 

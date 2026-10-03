@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from collections import Counter
@@ -12,7 +13,7 @@ from pathlib import Path
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
 EXPECTED_DETECTOR_CLASSES = {0: "mango", 1: "dragonfruit"}
 EXPECTED_CLASSIFIER_CLASSES = {
-    "mango": ["mango_premature", "mango_early", "mango_mature", "mango_ripe"],
+    "mango": ["mango_young", "mango_mature", "mango_turning", "mango_ripe"],
     "dragon": ["dragonfruit_unripe", "dragonfruit_ripe", "dragonfruit_rotten"],
 }
 
@@ -69,11 +70,69 @@ def validate_classifier_dataset(root: Path, species: str) -> None:
         print(f"{species}_classifier/{split}: {counts}")
 
 
+def require_maturity_readiness(dataset_root: Path, species: str) -> None:
+    from maturity_data import REVISION
+    path = dataset_root / "data_readiness.json"
+    if not path.is_file():
+        raise ValueError("Missing maturity data audit. Rebuild with the updated notebook steps 3–5.")
+    report = json.loads(path.read_text())
+    if report.get("data_revision") != REVISION:
+        raise ValueError("Stale maturity audit; rerun data preparation.")
+    stage = species + "_classifier"
+    result = report["stages"][stage]
+    manifest = dataset_root / stage / "manifest.csv"
+    if not result["ready_for_training_trial"]:
+        raise ValueError(f"{stage} data is not ready:\n" + "\n".join(result["failures"][:12])
+                         + "\nComplete the missing labeled-data import and rerun steps 4–5. Do not resume old weights.")
+    if not manifest.is_file() or hashlib.sha256(manifest.read_bytes()).hexdigest() != result["manifest_sha256"]:
+        raise ValueError("Classifier manifest changed after its audit; rebuild and audit again.")
+
+
+FP16_MAX = 65504.0
+
+
+def save_fp32_best(trainer) -> None:
+    """Ultralytics saves best.pt in fp16. BatchNorm variances above 65504 are then
+    clipped, which broke the maturity_v4 detector (bogus full-image boxes at
+    100% confidence). Keep a float32 copy of the same EMA weights alongside it."""
+    import copy
+
+    import torch
+
+    if trainer.best_fitness == trainer.fitness:
+        torch.save({"model": copy.deepcopy(trainer.ema.ema).float(), "train_args": vars(trainer.args), "epoch": -1},
+                   trainer.wdir / "best_fp32.pt")
+
+
+def saturated_batchnorm(weights: Path) -> list[str]:
+    import torch
+
+    model = torch.load(weights, map_location="cpu", weights_only=False)["model"]
+    # Only fp16 storage clips; large variances in a float32 file are genuine.
+    return [name for name, module in model.named_modules()
+            if isinstance(module, torch.nn.BatchNorm2d) and module.running_var.dtype == torch.float16
+            and float(module.running_var.max()) >= FP16_MAX * 0.999]
+
+
+def usable_best(best: Path) -> Path:
+    """Return best.pt, or its float32 copy when fp16 saving clipped BatchNorm statistics."""
+    clipped = saturated_batchnorm(best)
+    if not clipped:
+        return best
+    fp32 = best.with_name("best_fp32.pt")
+    if fp32.is_file() and not saturated_batchnorm(fp32):
+        print(f"{best} has BatchNorm variance clipped at the fp16 maximum ({clipped}); using {fp32}")
+        return fp32
+    raise ValueError(f"{best} has BatchNorm variance clipped at the fp16 maximum in {clipped} and no float32 copy exists. "
+                     "Repair it with scripts/repair_batchnorm_fp16.py before using it.")
+
+
 def resume_training(last: Path, best: Path, label: str) -> None:
     """Resume an interrupted run, or reuse weights from a finished run."""
     from ultralytics import YOLO
 
     model = YOLO(str(last))
+    model.add_callback("on_model_save", save_fp32_best)
     checkpoint = model.ckpt
     epoch = checkpoint.get("epoch", -1)
     epochs = checkpoint.get("train_args", {}).get("epochs")
@@ -99,6 +158,7 @@ def train_detector(data_yaml: Path, project: Path, args: argparse.Namespace) -> 
         raise FileNotFoundError(f"Cannot resume detector: {last} is missing. Existing weights: {best}")
     else:
         model = YOLO(args.detector_base)
+        model.add_callback("on_model_save", save_fp32_best)
         model.train(
             data=str(data_yaml),
             epochs=args.detector_epochs,
@@ -125,6 +185,7 @@ def train_detector(data_yaml: Path, project: Path, args: argparse.Namespace) -> 
             workers=args.workers,
             plots=True,
         )
+    best = usable_best(best)
     model = YOLO(str(best))
     model.val(
         data=str(data_yaml),
@@ -157,6 +218,7 @@ def train_classifier(
         raise FileNotFoundError(f"Cannot resume {species} classifier: {last} is missing. Existing weights: {best}")
     else:
         model = YOLO(args.classifier_base)
+        model.add_callback("on_model_save", save_fp32_best)
         model.train(
             data=str(dataset_root),
             epochs=args.classifier_epochs,
@@ -174,6 +236,7 @@ def train_classifier(
             hsv_h=0.0,
             hsv_s=0.35,
             hsv_v=0.25,
+            auto_augment=None,
             degrees=10.0,
             translate=0.08,
             scale=0.25,
@@ -182,6 +245,7 @@ def train_classifier(
             workers=args.workers,
             plots=True,
         )
+    best = usable_best(best)
     model = YOLO(str(best))
     model.val(
         data=str(dataset_root),
@@ -248,12 +312,16 @@ def choose_class_thresholds(
             index
             for index, precision in enumerate(cumulative_precision)
             if index + 1 >= minimum_support and precision >= target_precision
+            # A threshold accepts every prediction tied at that confidence.
+            # Evaluate complete tie groups, not an optimistic partial prefix.
+            and (index == len(order) - 1 or ordered_confidence[index + 1] < ordered_confidence[index])
         ]
         if not valid:
             thresholds[class_name] = 1.0
         else:
             # Largest accepted prefix gives the best coverage at the requested precision.
-            thresholds[class_name] = round(float(ordered_confidence[max(valid)]), 6)
+            # Rounding 0.9999997868 to 1.0 rejected valid dragon-fruit crops.
+            thresholds[class_name] = float(ordered_confidence[max(valid)])
     return thresholds
 
 
@@ -290,7 +358,9 @@ def calibrate_classifier(
         device=args.device,
         verbose=False,
     )
-    probabilities = np.stack([result.probs.data.cpu().numpy() for result in results])
+    # Match backend.two_stage.calibrate_probabilities: float32 can round
+    # confidence to 1.0 while the backend's float64 value remains below it.
+    probabilities = np.stack([result.probs.data.cpu().numpy() for result in results]).astype(np.float64)
     log_probabilities = np.log(np.clip(probabilities, 1e-12, 1.0))
 
     def objective(temperature: float) -> float:
@@ -308,7 +378,7 @@ def calibrate_classifier(
     )
     payload = {
         "weights": str(weights),
-        "temperature": round(temperature, 6),
+        "temperature": temperature,
         "target_precision": args.target_precision,
         "class_names": class_names,
         "class_thresholds": thresholds,
@@ -329,9 +399,14 @@ def run(args: argparse.Namespace) -> dict:
     dragon_root = args.dataset_root / "dragon_classifier"
     args.project.mkdir(parents=True, exist_ok=True)
 
-    validate_detector_dataset(detector_yaml)
-    validate_classifier_dataset(mango_root, "mango")
-    validate_classifier_dataset(dragon_root, "dragon")
+    if not args.skip_detector:
+        validate_detector_dataset(detector_yaml)
+    if not args.skip_mango_classifier:
+        require_maturity_readiness(args.dataset_root, "mango")
+        validate_classifier_dataset(mango_root, "mango")
+    if not args.skip_dragon_classifier:
+        require_maturity_readiness(args.dataset_root, "dragon")
+        validate_classifier_dataset(dragon_root, "dragon")
 
     outputs = {}
     if not args.skip_detector:

@@ -1,6 +1,6 @@
 {
-  "generated_on": "2026-09-24",
-  "license_policy": "Only datasets with an explicit open license are included.",
+  "generated_on": "2026-09-28",
+  "license_policy": "Record each publisher's explicit license. MangoFruitBD restricts use to noncommercial purposes; the other sources use CC BY 4.0.",
   "datasets": [
     {
       "id": "mango_yolo",
@@ -76,6 +76,53 @@
         "value": "7265501db07c50056a3d4062be44c1f30f98cb039ef4ecbf2a591fccf4fa27fc"
       },
       "notes": "Mature/immature classification images, including augmented copies; no detection boxes."
+    },
+    {
+      "id": "dragon_fruit_orchard",
+      "title": "DF pose dataset, version 2",
+      "authors": "Xing Yang",
+      "species": "dragon_fruit",
+      "task": "pose_to_object_detection",
+      "source_page": "https://data.mendeley.com/datasets/t8kbmg6cgz/2",
+      "download_url": "https://data.mendeley.com/public-files/datasets/t8kbmg6cgz/files/a6dde2a4-a170-488c-8bda-35bafb0f84ac/file_downloaded",
+      "license": "CC BY 4.0",
+      "archive_bytes": 1193555548,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "97caeb0104f780dd6c342035b91114b9f72ae2a846978e26e5cdd10317ab8423"
+      },
+      "notes": "Selective ZIP import via scripts/download_orchard_datasets.py: original HD1080 orchard frames with valid matching labels. Exclude augmented/maturity copies and missing labels. Extract bounding boxes from pose fields, map both pose classes to dragonfruit. Group by recording. No maturity supervision. Selected ZIP member CRCs verified; full archive hash is publisher metadata only."
+    },
+    {
+      "id": "mango_orchard_daylight",
+      "title": "MangoFruitBD, version 2",
+      "authors": "Ariful Islam; Sadia Afroz Oishi; Md. Maksudul Hasan; Sajeeb Kumar Ray; Md. Anwar Hossain; Naima Islam; Anomik Kumar",
+      "species": "mango",
+      "task": "object_detection",
+      "source_page": "https://data.mendeley.com/datasets/bhrz29mkmr/2",
+      "download_url": "https://data.mendeley.com/public-files/datasets/bhrz29mkmr/files/e42f9450-9138-4d27-85e0-4a5cdc35d2b7/file_downloaded",
+      "license": "CC BY-NC 3.0 on landing page; archive README says CC BY-NC 4.0. Noncommercial research use.",
+      "archive_bytes": 4135934275,
+      "checksum": {
+        "algorithm": "sha256",
+        "value": "a6db857c7eab03d52692060e8e52e401bb6d2740eb100d634a21f7e363540447"
+      },
+      "notes": "Selective ZIP import excludes 238 controlled-background/augmented Alternaria images. Use orchard images and 24 verified background negatives; map disease classes to mango species only. Image-level groups: capture/tree identifiers unavailable. Preserve aspect ratio, maximum image edge 1600. Selected member CRCs verified; full archive hash is publisher metadata only."
+    },
+    {
+      "id": "dragon_fruit_black_rot",
+      "title": "DragonFruit-MultiOrgan Dataset, original fruit Black_Rot subset",
+      "authors": "MD. Fahiz Siddikur Pranto; Anamika Dhar; Rokonozzaman Ayon",
+      "species": "dragon_fruit",
+      "task": "spoilage_classification",
+      "source_page": "https://data.mendeley.com/datasets/kpsywfwkrf/1",
+      "license": "CC BY 4.0",
+      "advertised_original_images": 675,
+      "local_status": "downloaded_checksum_verified_and_visually_screened",
+      "notes": "Colab step 3B imports the original Dragon Fruit/Fruit/Black_Rot folder, excluding the Balanced tree. All 675 originals verified against publisher size and SHA256 and decoded. Preparation removes 405 exact copies; 270 distinct images remain before split curation. Contact sheets of all 270 screened for visible decay. Three confirmed repeated-view pairs are grouped by original hashes. Image-level labels only; covers one disease, not all spoilage. Fruit/capture identities and target-orchard performance remain unverified.",
+      "downloaded_files": 675,
+      "unique_images": 270,
+      "exact_duplicates": 405
     },
     {
       "id": "dragon_fruit_quality",

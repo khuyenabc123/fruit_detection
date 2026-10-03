@@ -1,0 +1,241 @@
+{
+  "date": "2026-09-28",
+  "purpose": "Labeled detector data review before retraining; no model trained",
+  "sources": {
+    "dragon_fruit_orchard": {
+      "source": {
+        "page": "https://data.mendeley.com/datasets/t8kbmg6cgz/2",
+        "url": "https://data.mendeley.com/public-files/datasets/t8kbmg6cgz/files/a6dde2a4-a170-488c-8bda-35bafb0f84ac/file_downloaded",
+        "archive_bytes": 1193555548,
+        "archive_sha256": "97caeb0104f780dd6c342035b91114b9f72ae2a846978e26e5cdd10317ab8423",
+        "license": "CC BY 4.0",
+        "species_id": 1,
+        "format": "pose",
+        "selection": "Original HD1080 orchard frames with matching nonempty pose labels; exclude augmentations and Mendeley maturity copies."
+      },
+      "downloaded_images": 2448,
+      "downloaded_boxes": 4637,
+      "unique_images": 2448,
+      "boxes_after_exact_deduplication": 4637,
+      "background_images": 0,
+      "median_box_image_area_percent": 0.6202742689000001,
+      "groups": 7,
+      "excluded": {
+        "augmentation_or_existing_maturity_source": 4727,
+        "missing_label_file": 1301
+      },
+      "invalid_labels": 0,
+      "visual_review": "12 randomly selected imported images reviewed with bounding-box overlays (seed 20260928), plus earlier source samples",
+      "storage": "data/external/extracted/dragon_fruit_orchard"
+    },
+    "mango_orchard_daylight": {
+      "source": {
+        "page": "https://data.mendeley.com/datasets/bhrz29mkmr/2",
+        "url": "https://data.mendeley.com/public-files/datasets/bhrz29mkmr/files/e42f9450-9138-4d27-85e0-4a5cdc35d2b7/file_downloaded",
+        "archive_bytes": 4135934275,
+        "archive_sha256": "a6db857c7eab03d52692060e8e52e401bb6d2740eb100d634a21f7e363540447",
+        "license": "CC BY-NC 3.0 on version-2 landing page; archive README states CC BY-NC 4.0. Research/noncommercial use only.",
+        "species_id": 0,
+        "format": "box",
+        "selection": "Exclude controlled-background/augmented Alternaria images; retain other source categories and explicitly labeled Background images."
+      },
+      "downloaded_images": 1072,
+      "downloaded_boxes": 1841,
+      "unique_images": 1070,
+      "boxes_after_exact_deduplication": 1832,
+      "background_images": 24,
+      "median_box_image_area_percent": 17.527808174999997,
+      "groups": 1072,
+      "excluded": {
+        "controlled_background_or_augmentation": 238
+      },
+      "invalid_labels": 0,
+      "visual_review": "12 randomly selected imported images reviewed with bounding-box overlays (seed 20260928), plus earlier source samples",
+      "storage": "data/external/extracted/mango_orchard_daylight"
+    }
+  },
+  "findings": [
+    "Existing mango sources already provide many small-object boxes, but the inspected canopy samples are predominantly dark/artificially lit. MangoFruitBD adds daylight variety; many images remain closeups and some are off-tree.",
+    "Dragon orchard frames add small fruit amid branches; they are seven recording groups, not 2448 independent scenes. Some visible partial/distant fruit are unlabeled in inspected source images.",
+    "MangoFruitBD contains two exact duplicate image pairs, one crossing its original train/validation folders. Project preparation removes exact duplicates before making new splits.",
+    "Pose/disease labels supervise species detection only. New orchard imports are never used as ripeness labels.",
+    "Source ZIP CRC and image decoding checked during import. Whole-archive SHA256 values are publisher metadata, not verified whole-file checksums.",
+    "Old Roboflow polygon labels previously parsed as boxes are now converted correctly. Old detector/dragon-classifier checkpoints require retraining.",
+    "Target-orchard accuracy and exhaustive annotation quality remain unproven. Keep an independent field test. RF Fresh/Defect source names still require maturity-label review.",
+    "Inspected dragon orchard frames predominantly show red fruit; broad unripe-on-plant coverage has not been established.",
+    "Dragon recording allocation uses frame counts; the corrected split avoids putting only the 23-frame clip in validation."
+  ],
+  "combined_preparation": {
+    "seed": 42,
+    "detector_source_images": {
+      "dragon_fruit_orchard": 2448,
+      "mango_on_tree": 536,
+      "mango_orchard_daylight": 1070,
+      "mango_yolo": 1730,
+      "rf_dragonfruit": 3007,
+      "rf_mango": 2004
+    },
+    "rules": {
+      "detector_classes": {
+        "0": "mango",
+        "1": "dragonfruit"
+      },
+      "mango_classifier_classes": [
+        "mango_premature",
+        "mango_early",
+        "mango_mature",
+        "mango_ripe"
+      ],
+      "dragon_classifier_classes": [
+        "dragonfruit_unripe",
+        "dragonfruit_ripe",
+        "dragonfruit_rotten"
+      ],
+      "standalone_dragon_quality_archive_used": false,
+      "roboflow_fresh_defect_named_images": 1550,
+      "quality_source_maturity_labels_require_review": true,
+      "mendeley_augmented_images_used": false,
+      "orchard_imports_detector_only": true,
+      "dragon_orchard_recordings_balanced_by_frame_count": true
+    },
+    "deduplication": {
+      "detector_exact_duplicates_removed": 8,
+      "mango_classifier_duplicates_removed": 0,
+      "dragon_classifier_duplicates_removed": 631
+    },
+    "detector": {
+      "boxes_test": 5005,
+      "boxes_test_dragonfruit": 1242,
+      "boxes_test_mango": 3763,
+      "boxes_train": 24156,
+      "boxes_train_dragonfruit": 6427,
+      "boxes_train_mango": 17729,
+      "boxes_val": 5301,
+      "boxes_val_dragonfruit": 1232,
+      "boxes_val_mango": 4069,
+      "images_test": 1663,
+      "images_train": 7522,
+      "images_val": 1610
+    },
+    "mango_classifier": {
+      "images_calib": 132,
+      "images_calib_mango_early": 25,
+      "images_calib_mango_mature": 38,
+      "images_calib_mango_premature": 44,
+      "images_calib_mango_ripe": 25,
+      "images_test": 138,
+      "images_test_mango_early": 26,
+      "images_test_mango_mature": 39,
+      "images_test_mango_premature": 48,
+      "images_test_mango_ripe": 25,
+      "images_train": 2106,
+      "images_train_mango_early": 534,
+      "images_train_mango_mature": 606,
+      "images_train_mango_premature": 606,
+      "images_train_mango_ripe": 360,
+      "images_val": 219,
+      "images_val_mango_early": 45,
+      "images_val_mango_mature": 65,
+      "images_val_mango_premature": 62,
+      "images_val_mango_ripe": 47,
+      "skipped_nontrain_augmented_variants": 579
+    },
+    "dragon_classifier": {
+      "images_calib": 406,
+      "images_calib_dragonfruit_ripe": 172,
+      "images_calib_dragonfruit_rotten": 157,
+      "images_calib_dragonfruit_unripe": 77,
+      "images_test": 439,
+      "images_test_dragonfruit_ripe": 172,
+      "images_test_dragonfruit_rotten": 191,
+      "images_test_dragonfruit_unripe": 76,
+      "images_train": 3697,
+      "images_train_dragonfruit_ripe": 1665,
+      "images_train_dragonfruit_rotten": 913,
+      "images_train_dragonfruit_unripe": 1119,
+      "images_val": 600,
+      "images_val_dragonfruit_ripe": 259,
+      "images_val_dragonfruit_rotten": 223,
+      "images_val_dragonfruit_unripe": 118,
+      "skipped_nontrain_augmented_variants": 617
+    }
+  },
+  "validation": {
+    "detector": {
+      "manifest_images": 10795,
+      "group_split_overlap": 0,
+      "source_hash_split_overlap": 0,
+      "splits": {
+        "train": 7522,
+        "test": 1663,
+        "val": 1610
+      },
+      "source_splits": {
+        "dragon_fruit_orchard": {
+          "train": 1694,
+          "test": 407,
+          "val": 347
+        },
+        "mango_on_tree": {
+          "train": 376,
+          "val": 79,
+          "test": 81
+        },
+        "mango_orchard_daylight": {
+          "train": 749,
+          "test": 161,
+          "val": 160
+        },
+        "mango_yolo": {
+          "train": 1194,
+          "test": 261,
+          "val": 275
+        },
+        "rf_dragonfruit": {
+          "train": 2105,
+          "val": 451,
+          "test": 451
+        },
+        "rf_mango": {
+          "train": 1404,
+          "val": 298,
+          "test": 302
+        }
+      }
+    },
+    "mango_classifier": {
+      "manifest_images": 2595,
+      "group_split_overlap": 0,
+      "source_hash_split_overlap": 0,
+      "splits": {
+        "calib": 132,
+        "val": 219,
+        "train": 2106,
+        "test": 138
+      }
+    },
+    "dragon_classifier": {
+      "manifest_images": 5142,
+      "group_split_overlap": 0,
+      "source_hash_split_overlap": 0,
+      "splits": {
+        "calib": 406,
+        "val": 600,
+        "train": 3697,
+        "test": 439
+      }
+    }
+  },
+  "review_samples_directory": "data/prepared/two_stage_orchard_v1/review",
+  "checks_passed": [
+    "Selected source member CRC and image decoding",
+    "Normalized image SHA256 and label/manifest agreement",
+    "All detector box geometry within normalized bounds",
+    "Required class coverage in every stage/split",
+    "No group or exact source-hash overlap between splits within each stage",
+    "Balanced dragon recording allocation",
+    "Eight regression tests",
+    "Cache save/restore with a synthetic fixture",
+    "Notebook code cell syntax"
+  ]
+}
