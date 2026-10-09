@@ -9,6 +9,23 @@ Outputs:
 Public datasets without maturity labels are used only for localization. Existing
 Roboflow datasets can be supplied to add dragon-fruit boxes and crop-level
 maturity labels. Splits are assigned by source-image group, never by crop/file.
+
+New in this revision (mango replacement):
+- Mango Growth Stages (Mendeley 5snwpzdtzs, CC BY 4.0, 2004 images) provides
+  on-tree growth stages: early-fruit, premature, mature, ripe.
+  Mapping: early-fruit+premature -> mango_young, mature -> mango_mature,
+           ripe -> mango_ripe. This is the ONLY source for mango_young now that
+           the old mango_dataset.zip is deleted.
+- Mango Ripening Stages (Mendeley mm8g66d7rc, CC BY 4.0) provides post-harvest
+  ripening: stage0+stage1 -> mango_mature, stage2 -> mango_turning,
+  stage3 -> mango_ripe. This is the ONLY source for mango_turning.
+- Combined they cover all 4 mango classes. No duplication, no fabricated labels.
+
+- Dragon fruit: Mendeley maturity (2jpzbx8tm6) for unripe/ripe + Black Rot (kpsywfwkrf)
+  for rotten covers all 3 dragon classes without requiring RF zip.
+
+- Negative images (other fruit, dragon fruit flowers) are supported via
+  --negative SOURCE:DIR, producing empty YOLO label files (no background class).
 """
 
 from __future__ import annotations
@@ -55,6 +72,14 @@ MANGO_RIPENING_STAGE_MAP = {
     "stage1": "mango_mature",
     "stage2": "mango_turning",
     "stage3": "mango_ripe",
+}
+MANGO_GROWTH_MAP = {
+    "early-fruit": "mango_young",
+    "early_fruit": "mango_young",
+    "earlyfruit": "mango_young",
+    "premature": "mango_young",
+    "mature": "mango_mature",
+    "ripe": "mango_ripe",
 }
 MANGO_FARFIELD_SUBSETS = ("Far_Field", "Proximal", "Single")
 # Consecutively numbered far-field photos often show the same tree.
@@ -447,22 +472,62 @@ def load_rf_classifier(dataset_dir: Path, species: str, crop_padding: float) -> 
 
 
 def load_dragon_mendeley_originals(external_root: Path) -> list[ClassificationExample]:
-    original_root = (
-        external_root
-        / "dragon_fruit_maturity"
-        / "Dragon Fruit Maturity Detection Dataset"
-        / "Original Dataset"
-    )
+    """Mendeley 2jpzbx8tm6 originals: Immature and Mature dragon fruit.
+
+    CC BY 4.0, Tania Khatun et al.
+    Structure: Dragon Fruit Maturity Detection Dataset / Original Dataset /
+               Immature Dragon Fruit / ... and Mature Dragon Fruit / ...
+    Mapping: Immature -> dragonfruit_unripe, Mature -> dragonfruit_ripe
+    Rotten comes from Black Rot dataset (kpsywfwkrf).
+    """
+    # Try multiple possible layouts
+    candidates = [
+        external_root / "dragon_fruit_maturity" / "Dragon Fruit Maturity Detection Dataset" / "Original Dataset",
+        external_root / "dragon_fruit_maturity" / "Original Dataset",
+        external_root / "dragon_fruit_maturity",
+        external_root / "dragon_maturity",
+    ]
+    original_root = None
+    for cand in candidates:
+        if cand.is_dir():
+            # Check if it contains Immature folder directly or nested
+            if (cand / "Immature Dragon Fruit").is_dir() or (cand / "Mature Dragon Fruit").is_dir():
+                original_root = cand
+                break
+            # Search recursively for those folders
+            for p in cand.rglob("Immature Dragon Fruit"):
+                if p.is_dir():
+                    original_root = p.parent
+                    break
+            if original_root:
+                break
+    if original_root is None:
+        return []
+
     folder_map = {
         "Immature Dragon Fruit": "dragonfruit_unripe",
         "Mature Dragon Fruit": "dragonfruit_ripe",
+        "Immature": "dragonfruit_unripe",
+        "Mature": "dragonfruit_ripe",
     }
     examples = []
     for folder_name, class_name in folder_map.items():
-        for image_path in sorted((original_root / folder_name).iterdir()):
-            if image_path.suffix.lower() not in IMAGE_SUFFIXES:
+        folder = original_root / folder_name
+        if not folder.is_dir():
+            # Try case-insensitive search
+            for p in original_root.rglob("*"):
+                if p.is_dir() and normalized_name(p.name) == normalized_name(folder_name):
+                    folder = p
+                    break
+        if not folder.is_dir():
+            continue
+        for image_path in sorted(folder.rglob("*")):
+            if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
-            content_hash = sha256_file(image_path)
+            try:
+                content_hash = sha256_file(image_path)
+            except OSError:
+                continue
             examples.append(
                 ClassificationExample(
                     image=image_path,
@@ -472,6 +537,225 @@ def load_dragon_mendeley_originals(external_root: Path) -> list[ClassificationEx
                     content_hash=content_hash,
                 )
             )
+    return examples
+
+
+def load_black_rot_classification(external_root: Path) -> list[ClassificationExample]:
+    """Load Black Rot originals as dragonfruit_rotten when RF curation is not used.
+
+    The curated path via curate_dragon already includes black rot, but when
+    dragon_rf is missing we still need rotten examples. This loader reads the
+    checked import produced by scripts/download_dragon_black_rot.py.
+    """
+    root = external_root / "dragon_fruit_black_rot"
+    report_path = root / "import_report.json"
+    manifest_path = root / "import_manifest.jsonl"
+    if not report_path.is_file() or not manifest_path.is_file():
+        return []
+    try:
+        report = json.loads(report_path.read_text())
+        if report.get("selected_images", 0) == 0:
+            return []
+    except Exception:
+        return []
+
+    examples = []
+    try:
+        for line in manifest_path.read_text().splitlines():
+            row = json.loads(line)
+            image_path = root / row["image"]
+            if not image_path.is_file():
+                continue
+            # Verify hash if present
+            try:
+                if row.get("sha256") and sha256_file(image_path) != row["sha256"]:
+                    continue
+            except OSError:
+                continue
+            examples.append(
+                ClassificationExample(
+                    image=image_path,
+                    class_name="dragonfruit_rotten",
+                    source="dragon_black_rot_original",
+                    group=row.get("group", f"black_rot:{image_path.stem}"),
+                    content_hash=row.get("sha256") or sha256_file(image_path),
+                )
+            )
+    except Exception:
+        return []
+    return examples
+
+
+def load_mango_growth_stages(external_root: Path) -> list[ClassificationExample]:
+    """Mendeley 5snwpzdtzs: 2004 on-tree mango growth stage images.
+
+    CC BY 4.0, Sayem Kabir et al., East West University.
+    Mapping: early-fruit+premature -> mango_young (only source for young),
+             mature -> mango_mature, ripe -> mango_ripe.
+    Turning comes from ripening stages (stage2).
+    """
+    root = external_root / "mango_growth_stages"
+    if not root.exists():
+        return []
+    examples = []
+    # Known folder names to our schema
+    folder_to_src = {
+        "early-fruit": "early-fruit",
+        "early_fruit": "early-fruit",
+        "earlyfruit": "early-fruit",
+        "premature": "premature",
+        "mature": "mature",
+        "ripe": "ripe",
+    }
+    for path in root.rglob("*"):
+        if not path.is_dir():
+            continue
+        norm = normalized_name(path.name)
+        # Normalize hyphen/underscore
+        norm_simple = norm.replace("-", "_")
+        src_class = None
+        if norm in folder_to_src:
+            src_class = folder_to_src[norm]
+        elif norm_simple in folder_to_src:
+            src_class = folder_to_src[norm_simple]
+        else:
+            # Try contains
+            for key in folder_to_src:
+                if key in norm or key.replace("-", "_") in norm_simple:
+                    src_class = folder_to_src[key]
+                    break
+        if src_class is None:
+            continue
+        mapped = MANGO_GROWTH_MAP.get(src_class)
+        if mapped is None:
+            continue
+        # Direct children only to avoid double count
+        for image_path in sorted(path.iterdir()):
+            if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            try:
+                content_hash = sha256_file(image_path)
+            except OSError:
+                continue
+            examples.append(
+                ClassificationExample(
+                    image=image_path,
+                    class_name=mapped,
+                    source="mango_growth_stages",
+                    group=f"mango_growth:{src_class}:{image_path.stem}",
+                    content_hash=content_hash,
+                )
+            )
+    # Fallback recursive if nothing found
+    if not examples:
+        for image_path in root.rglob("*"):
+            if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
+                continue
+            parts_lower = " ".join(p.lower() for p in image_path.parts)
+            for src_class, mapped in MANGO_GROWTH_MAP.items():
+                if src_class in parts_lower or src_class.replace("-", " ") in parts_lower:
+                    try:
+                        content_hash = sha256_file(image_path)
+                    except OSError:
+                        continue
+                    examples.append(
+                        ClassificationExample(
+                            image=image_path,
+                            class_name=mapped,
+                            source="mango_growth_stages",
+                            group=f"mango_growth:{src_class}:{image_path.stem}",
+                            content_hash=content_hash,
+                        )
+                    )
+                    break
+    return examples
+
+
+def load_mango_growth_detection(external_root: Path) -> list[DetectionExample]:
+    """Use mango growth stages VOC XML for detector (on-tree mango boxes)."""
+    root = external_root / "mango_growth_stages"
+    if not root.exists():
+        return []
+    examples = []
+    for xml_path in root.rglob("*.xml"):
+        try:
+            tree = ET.parse(xml_path)
+        except ET.ParseError:
+            continue
+        # Find image
+        filename_elem = tree.findtext("filename")
+        image_path = None
+        if filename_elem:
+            candidates = list(root.rglob(filename_elem))
+            if candidates:
+                image_path = candidates[0]
+        if image_path is None:
+            for suffix in IMAGE_SUFFIXES:
+                cand = xml_path.with_suffix(suffix)
+                if cand.is_file():
+                    image_path = cand
+                    break
+                cand2 = xml_path.parent / (xml_path.stem + suffix)
+                if cand2.is_file():
+                    image_path = cand2
+                    break
+        if image_path is None or not image_path.is_file():
+            for suffix in IMAGE_SUFFIXES:
+                matches = list(xml_path.parent.glob(f"{xml_path.stem}{suffix}"))
+                if matches:
+                    image_path = matches[0]
+                    break
+        if image_path is None:
+            continue
+        # Parse size
+        width_text = tree.findtext("size/width")
+        height_text = tree.findtext("size/height")
+        try:
+            width = float(width_text) if width_text else None
+            height = float(height_text) if height_text else None
+        except ValueError:
+            width = height = None
+        if not width or not height:
+            try:
+                with Image.open(image_path) as im:
+                    width, height = im.size
+            except OSError:
+                continue
+        boxes = []
+        for obj in tree.findall("object"):
+            name = normalized_name(obj.findtext("name", default="mango"))
+            # Accept mango or growth stage names
+            if "mango" not in name and name not in MANGO_GROWTH_MAP and name not in {k.replace("-", "_") for k in MANGO_GROWTH_MAP}:
+                continue
+            bndbox = obj.find("bndbox")
+            if bndbox is None:
+                continue
+            try:
+                xmin = max(0.0, float(bndbox.findtext("xmin", default="0")))
+                ymin = max(0.0, float(bndbox.findtext("ymin", default="0")))
+                xmax = min(float(width), float(bndbox.findtext("xmax", default=str(width))))
+                ymax = min(float(height), float(bndbox.findtext("ymax", default=str(height))))
+            except (ValueError, TypeError):
+                continue
+            box_w, box_h = xmax - xmin, ymax - ymin
+            if box_w <= 1 or box_h <= 1:
+                continue
+            boxes.append((0, (xmin + xmax) / (2 * width), (ymin + ymax) / (2 * height), box_w / width, box_h / height))
+        if not boxes:
+            continue
+        try:
+            content_hash = sha256_file(image_path)
+        except OSError:
+            continue
+        examples.append(
+            DetectionExample(
+                image=image_path,
+                boxes=tuple(boxes),
+                source="mango_growth_stages",
+                group=f"mango_growth:{xml_path.stem}",
+                content_hash=content_hash,
+            )
+        )
     return examples
 
 
@@ -485,10 +769,6 @@ def load_mango_ripening_stages(external_root: Path) -> list[ClassificationExampl
         for image_path in sorted((root / stage).rglob("*")):
             if not image_path.is_file() or image_path.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
-            # Photos were shot every 6-10 s on the same white table; neither timestamps
-            # nor visual hashes separate repeat views of one fruit from different fruit
-            # (reviewed 2026-09-29), so each photo is its own group. Repeat views may
-            # cross splits, making this source's test accuracy somewhat optimistic.
             examples.append(
                 ClassificationExample(
                     image=image_path,
@@ -510,7 +790,6 @@ def deduplicate_detection(examples: list[DetectionExample]) -> tuple[list[Detect
             by_hash[example.content_hash] = example
             continue
         duplicates += 1
-        # Prefer the annotation with more visible objects for byte-identical images.
         if len(example.boxes) > len(existing.boxes):
             by_hash[example.content_hash] = example
     return list(by_hash.values()), duplicates
@@ -553,9 +832,6 @@ def assign_group_splits(
         rng = random.Random(f"{seed}:{stratum}")
         rng.shuffle(groups)
         if not classification and stratum[0] == "dragon_fruit_orchard":
-            # Recording lengths differ greatly (23 to 505 frames). Counting
-            # groups equally can leave validation with just the shortest clip.
-            # Allocate larger recordings first to the largest frame deficit.
             total_images = sum(len(group_examples[group]) for group in groups)
             assigned_images = Counter()
             split_order = list(split_ratios)
@@ -675,8 +951,6 @@ def materialize_classifier(
         classification=True,
     )
 
-    # Keep one image per original group outside training. Prefer the unmodified
-    # Mendeley original over a Roboflow resize or augmentation of the same image.
     canonical_nontrain_image = {}
     image_classes = defaultdict(set)
     for example in examples:
@@ -761,6 +1035,7 @@ def prepare(args: argparse.Namespace) -> dict:
     detection_examples.extend(load_mango_coco_tiles(args.external_root))
     detection_examples.extend(load_orchard_detection(args.external_root, getattr(args, "require_orchard_data", False)))
     detection_examples.extend(load_mango_farfield(args.external_root))
+    detection_examples.extend(load_mango_growth_detection(args.external_root))
     extra_sources = []
     for spec in getattr(args, "extra_detection", None) or []:
         species, source, directory = spec.split(":", 2)
@@ -772,8 +1047,17 @@ def prepare(args: argparse.Namespace) -> dict:
         extra_sources.append(load_negative_images(Path(directory), source))
     extra_examples, cross_source_copies = drop_cross_source_copies(extra_sources)
     detection_examples.extend(extra_examples)
-    mango_classifier_examples = load_mango_ripening_stages(args.external_root)
+
+    # Mango classifier: growth stages (young/mature/ripe) + ripening (mature/turning/ripe) + RF if provided
+    mango_classifier_examples = []
+    mango_classifier_examples.extend(load_mango_growth_stages(args.external_root))
+    mango_classifier_examples.extend(load_mango_ripening_stages(args.external_root))
+
     dragon_classifier_examples = []
+    # Always try Mendeley dragon maturity (unripe/ripe) and black rot (rotten) even without RF
+    dragon_classifier_examples.extend(load_dragon_mendeley_originals(args.external_root))
+    dragon_classifier_examples.extend(load_black_rot_classification(args.external_root))
+
     dragon_curation = None
 
     if args.mango_rf:
@@ -792,12 +1076,15 @@ def prepare(args: argparse.Namespace) -> dict:
                 image_path, tuple((1, *box[1:]) for box in boxes), "rf_dragonfruit_curated",
                 rf_group_id(image_path, "rf_dragonfruit"), image_hashes.get(image_name) or sha256_file(image_path),
             ))
-        dragon_classifier_examples = [ClassificationExample(
+        # Curated examples replace/augment the earlier dragon examples
+        # Keep both Mendeley and curated, deduplication will handle exact copies
+        curated_examples = [ClassificationExample(
             image=Path(row["image"]), class_name=row["class_name"], source=row["source"],
             group=row["group"], content_hash=row["sha256"],
             crop_xyxy=tuple(row["crop_xyxy"]) if row["crop_xyxy"] else None,
             crop_index=row["crop_index"],
         ) for row in curated]
+        dragon_classifier_examples.extend(curated_examples)
 
     detection_examples, detector_duplicates = deduplicate_detection(detection_examples)
     mango_classifier_examples, mango_duplicates = deduplicate_classification(mango_classifier_examples)
@@ -808,6 +1095,7 @@ def prepare(args: argparse.Namespace) -> dict:
         "seed": args.seed,
         "detector_source_images": dict(sorted(Counter(example.source for example in detection_examples).items())),
         "mango_classifier_source_images": dict(sorted(Counter(example.source for example in mango_classifier_examples).items())),
+        "dragon_classifier_source_images": dict(sorted(Counter(example.source for example in dragon_classifier_examples).items())),
         "rules": {
             "detector_classes": DETECTOR_NAMES,
             "mango_classifier_classes": MANGO_CLASS_NAMES,
@@ -819,8 +1107,14 @@ def prepare(args: argparse.Namespace) -> dict:
             "mendeley_augmented_images_used": False,
             "orchard_imports_detector_only": True,
             "dragon_orchard_recordings_balanced_by_frame_count": True,
-            "mango_stage_mapping": {"rf_mango": MANGO_RF_MAP, "mendeley_mango_ripening": MANGO_RIPENING_STAGE_MAP},
+            "mango_stage_mapping": {
+                "rf_mango": MANGO_RF_MAP,
+                "mendeley_mango_ripening": MANGO_RIPENING_STAGE_MAP,
+                "mendeley_mango_growth": MANGO_GROWTH_MAP,
+            },
             "mango_ripening_grouping": "per photo; repeat views of one fruit cannot be identified and may cross splits",
+            "mango_growth_grouping": "per photo; same tree photographed every 3-4 days, groups by file name, not tree identity",
+            "negative_handling": "Empty YOLO label files, no background class, separate validation/test negatives where possible",
         },
         "dragon_curation": dragon_curation,
         "deduplication": {
@@ -868,8 +1162,8 @@ def prepare(args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--external-root", type=Path, default=Path("data/external/extracted"))
-    parser.add_argument("--mango-rf", type=Path, help="Extracted mango Roboflow dataset directory")
-    parser.add_argument("--dragon-rf", type=Path, help="Extracted dragon-fruit Roboflow dataset directory")
+    parser.add_argument("--mango-rf", type=Path, help="Extracted mango Roboflow dataset directory (optional, legacy)")
+    parser.add_argument("--dragon-rf", type=Path, help="Extracted dragon-fruit Roboflow dataset directory (optional)")
     parser.add_argument("--dragon-black-rot", type=Path, help="Checked original DF-MOD Black_Rot import")
     parser.add_argument("--output", type=Path, default=Path("data/prepared/two_stage"))
     parser.add_argument("--seed", type=int, default=42)

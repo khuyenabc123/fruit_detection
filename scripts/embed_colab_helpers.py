@@ -12,6 +12,11 @@ FILES = [
     "training/maturity_data.py", "training/requirements.txt",
     "scripts/download_public_datasets.sh", "scripts/download_orchard_datasets.py",
     "scripts/download_dragon_black_rot.py",
+    "scripts/download_mango_datasets.py",
+    "scripts/download_dragon_maturity.py",
+    "scripts/download_negatives.py",
+    "scripts/download_negative_public.py",
+    "scripts/download_roboflow_detection.py",
 ]
 
 

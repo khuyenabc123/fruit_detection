@@ -88,8 +88,16 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=Path("data/external/extracted"))
     parser.add_argument("sources", nargs="*", default=list(SOURCES))
+    parser.add_argument("--skip-if-no-key", action="store_true", help="Skip if ROBOFLOW_API_KEY not set")
     args = parser.parse_args()
-    key = api_key()
+    try:
+        key = api_key()
+    except SystemExit as exc:
+        if args.skip_if_no_key:
+            print(f"[warn] No Roboflow API key, skipping Roboflow negatives. "
+                  f"Use download_negative_public.py for public fallback or set ROBOFLOW_API_KEY.", flush=True)
+            return
+        raise
     for source in args.sources:
         print(json.dumps(fetch(source, args.output_root, key)), flush=True)
 
