@@ -1,1139 +1,1134 @@
-"""Build the team's editable presentation and Word report from checked project facts."""
+"""Build the team's Word report (Duy Tan cover, detailed history, results and appendices).
 
-from datetime import date
+Every number comes from a file in the project (same sources as build_presentation.py):
+  .claude/worktrees/gcp-vertex-training/docs/PROJECT_HISTORY.md
+  fruit_detection_runs_gcp_review/<job>/ and regression_20261002/
+  data/prepared/*/preparation_report.json, data/external/*.json
+  ../fruit_detection_presentation/eval/summary.json
+
+The table of contents is written as a real TOC field with cached entries. Page
+numbers come from a rendered PDF of a first pass:
+
+  python3 reports/build_project_report.py                 # pass 1 (page numbers "…")
+  soffice --headless --convert-to pdf reports/Bao_cao_nhom_Smart_Orchard_AI.docx
+  python3 reports/build_project_report.py --pdf Bao_cao_nhom_Smart_Orchard_AI.pdf   # pass 2
+
+Appendix A copies the speaker notes from the PPTX built by build_presentation.py.
+Set FRUIT_ROOT to the main checkout when running from a worktree (images live there).
+"""
+
+import argparse
+import os
+import re
+import subprocess
 from pathlib import Path
-import json
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Cm, Pt as DocPt, RGBColor as DocRGB
+from docx.enum.section import WD_SECTION
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT, WD_TAB_LEADER
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
-from pptx import Presentation
-from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
-from pptx.util import Inches, Pt
+from docx.shared import Cm, Pt, RGBColor
 
+HERE = Path(__file__).resolve().parent
+ROOT = Path(os.environ.get("FRUIT_ROOT", HERE.parents[0]))
+OUT = HERE / "Bao_cao_nhom_Smart_Orchard_AI.docx"
+PPTX = HERE / "Smart_Orchard_AI_Thuyet_trinh_nhom.pptx"
+LOGO = HERE / "assets" / "dtu_logo.png"
+GCP = ROOT / "fruit_detection_runs_gcp_review"
+CASES = ROOT.parent / "fruit_detection_presentation" / "assets" / "cases"
+V3_PHOTOS = GCP / "4169118715503181824" / "pipeline_check"
 
-ROOT = Path(__file__).resolve().parents[1]
-OUT = Path(__file__).resolve().parent
-PHOTO_DRAGON = ROOT / "fruit_detection_runs_gcp_review/4169118715503181824/pipeline_check/user_photo_1.jpg"
-PHOTO_MANGO = ROOT / "fruit_detection_runs_gcp_review/4169118715503181824/pipeline_check/user_photo_3.jpg"
-METRIC_FILE = ROOT / "fruit_detection_runs_gcp_review/4169118715503181824/pipeline_check/v3_evaluation.json"
-REGRESSION_FILE = ROOT / "fruit_detection_runs_gcp_review/regression_20261002/trial_abc_summary.json"
-
-# Fill these fields when the team supplies the official details. Avoid invented names.
-SCHOOL = "ĐẠI HỌC QUỐC GIA – TRƯỜNG ĐẠI HỌC CÔNG NGHỆ THÔNG TIN"
-FACULTY = "KHOA KHOA HỌC MÁY TÍNH"
-TEAM = "NHÓM: ........................................"
-MEMBERS = ["........................................ (MSSV: ................)"]
+# Cover details. Fill the dotted fields when the team confirms them.
+UNIVERSITY = "ĐẠI HỌC DUY TÂN"
+UNIT = "BAN SAU ĐẠI HỌC"
+REPORT_TYPE = "BÁO CÁO ĐỒ ÁN NHÓM"
+COURSE = "MÔN MÁY HỌC"
+TOPIC = ("Smart Orchard AI – Nhận diện, đếm và đánh giá độ chín của xoài "
+         "và thanh long trên cây bằng học sâu")
+MEMBERS = [("Phạm Doãn Đức", "31311570148"),
+           ("........................................", "........................"),
+           ("........................................", "........................")]
 LECTURER = "........................................"
-COURSE = "MÁY HỌC"
-YEAR = "2025 – 2026"
+PLACE_DATE = "Đà Nẵng, ngày 10 tháng 10 năm 2026"
 
-NAVY = RGBColor(15, 35, 49)
-GREEN = RGBColor(24, 127, 91)
-MINT = RGBColor(218, 243, 230)
-GOLD = RGBColor(238, 169, 67)
-WHITE = RGBColor(255, 255, 255)
-INK = RGBColor(31, 48, 58)
-MUTED = RGBColor(99, 119, 128)
-PALE = RGBColor(245, 249, 247)
-RED = RGBColor(179, 67, 64)
-
-TALK_TRACKS = [
-    ("Mở đầu", "Nhóm trình bày Smart Orchard AI, hệ thống hỗ trợ quan sát xoài và thanh long trên cây. "
-     "Báo cáo đi từ bài toán và quá trình phát triển đến dữ liệu, mô hình, ứng dụng và kết quả. "
-     "Nêu tên nhóm, các thành viên và phần việc thật sau khi đã được điền chính thức."),
-    ("Bài toán", "Trong ảnh vườn, quả có thể khuất lá, nhỏ và chồng lên nhau. Ánh sáng thay đổi còn làm màu "
-     "quả kém ổn định. Nhóm đặt ba đầu ra: vị trí quả, độ chín và số lượng. Sản phẩm hỗ trợ quan sát chứ "
-     "chưa thay phép đếm, đánh giá trực tiếp tại vườn."),
-    ("Phạm vi", "Ảnh tĩnh trả box, nhãn và số lượng. Video dùng ByteTrack để ước lượng số quả theo loài, "
-     "hiện không phân loại độ chín từng track. Trang web nhận tệp và hiển thị kết quả; FastAPI cung cấp "
-     "API tương ứng cho ảnh, video và trạng thái mô hình."),
-    ("Các mốc", "Lịch sử Git bắt đầu từ 12/09. Ngày 18/09 nhóm có notebook Colab và baseline 7 lớp. "
-     "Từ 24/09 phát triển pipeline hai giai đoạn. Cuối tháng 9 bổ sung dữ liệu, kiểm toán nhãn và huấn "
-     "luyện bản v3. Đầu tháng 10 nhóm dựng benchmark ảnh âm tính, thử API/web và các detector sau rà nhãn."),
-    ("Đổi cách tiếp cận", "Baseline 7 lớp trả kết quả trong một lượt nhưng ghép hai nhiệm vụ khó: tìm "
-     "quả và đo độ chín. Bản mới tách detector theo loài khỏi classifier theo từng loài để có thể sửa lỗi "
-     "và đo riêng. Sau khi thấy ảnh quả khác gây false positive, nhóm còn thêm verifier tùy chọn và trạng "
-     "thái chưa chắc chắn cho độ chín."),
-    ("Pipeline", "Chỉ vào từng ô: ảnh đi vào YOLOv8s, detector trả box xoài/thanh long, rồi ảnh được cắt "
-     "theo box. Crop đi qua classifier theo loài và hiệu chỉnh xác suất. Verifier có thể loại quả khác. "
-     "Cuối cùng API trả box, nhãn, confidence và số lượng. Độ chín thấp điểm không bị ép thành nhãn chắc chắn."),
-    ("Dữ liệu và chất lượng", "Nhóm nhập dữ liệu Roboflow và các bộ ảnh vườn công khai. Tên lớp của từng "
-     "nguồn được ánh xạ theo tên, vì ID có thể khác. Ảnh trùng và biến thể cùng gốc được nhóm trước khi "
-     "chia tập. Tắt xoay hue vì đổi màu có thể làm sai nhãn độ chín."),
-    ("Quy mô v3", "Đây là quy mô thật của dữ liệu cho checkpoint v3 đang cài. Detector có 9.231 ảnh "
-     "train, 1.972 validation và 2.037 test. Classifier xoài có 2.688 ảnh train và 234 test; thanh long "
-     "có 958 train và 131 test. Calibration là tập riêng để chọn ngưỡng, không phải test."),
-    ("Lỗi dữ liệu", "Báo cáo kiểm toán phát hiện 145 mâu thuẫn nhãn độ chín và 703 box rất nhỏ trong "
-     "nguồn thanh long. 675 file Black_Rot chỉ có 270 ảnh khác nhau, nên bỏ 405 bản trùng. Nhóm cũng "
-     "không đánh đồng Fresh/Defect với ripe/rotten; dữ liệu không đủ rõ chỉ dùng cho nhiệm vụ phù hợp "
-     "hoặc được cách ly."),
-    ("Lớp đầu ra", "Xoài v3 dùng young, mature, turning và ripe; thanh long dùng unripe, ripe và rotten. "
-     "Đây là tên lớp trong checkpoint và calibration đang cài. Bộ dữ liệu maturity_v2 chuẩn bị sau đó "
-     "dùng premature/early cho xoài nhưng chưa thay model v3. Với cả hai loài, dự đoán yếu có nhãn "
-     "uncertain."),
-    ("Trình tự thực nghiệm", "Quy trình huấn luyện gồm chuẩn bị nhãn, kiểm tra split, train detector, train "
-     "hai classifier, rồi đánh giá test riêng. Sau đó nhóm fit temperature và chọn ngưỡng lớp trên "
-     "calibration. Việc lưu checkpoint lên cloud/Drive cho phép tiếp tục sau gián đoạn Colab và sao chép "
-     "weight vào backend."),
-    ("Thông số v3", "Detector v3 bắt đầu từ yolov8s.pt, ảnh 960 pixel, batch 8 và tối đa 100 epoch. "
-     "Classifier bắt đầu từ yolov8s-cls.pt, crop 320 pixel, batch 32 và tối đa 50 epoch. Cả ba dùng "
-     "AdamW, seed 42. Đây là thông số đọc từ args.yaml của lần train v3, không suy đoán từ code mới nhất."),
-    ("Suy luận", "Detector dùng confidence mặc định 0,25. Mỗi box được nới crop 10%; crop quá nhỏ, cạnh "
-     "dưới 64 pixel, vẫn có thể được đếm nhưng độ chín ghi chưa chắc chắn. Với crop đủ lớn, classifier "
-     "trả xác suất đã hiệu chỉnh. Ngưỡng chấp nhận là mức lớn hơn giữa 0,80 và ngưỡng riêng của lớp. "
-     "Verifier tùy chọn loại box có xác suất other từ 0,90."),
-    ("Detector v3", "Trên bộ hồi quy gồm 234 ảnh, 584 box chuẩn và ảnh âm tính, detector v3 có precision "
-     "55,3%, recall 82,5% và sai số đếm trung bình 1,83 quả mỗi ảnh. Đây là benchmark nguồn công khai, "
-     "không phải kiểm tra tại vườn của nhóm. Các chỉ số này chỉ đánh giá tìm box, chưa đánh giá độ chín."),
-    ("Thử detector khác", "Bộ hồi quy cho thấy v3 tạo 290 false box trên 112 ảnh âm tính. Sau rà nhãn, "
-     "một checkpoint v4_repaired thử nghiệm tăng precision lên 81,0% và giảm sai số đếm còn 0,64 trên "
-     "cùng bộ ảnh. Tuy nhiên backend hiện vẫn cài v3; v4 chưa được kiểm tra độc lập tại vườn mục tiêu "
-     "hoặc thay vào sản phẩm demo."),
-    ("Cải tiến suy luận", "Sau khi phân tích ảnh sai, nhóm thêm bộ kiểm tra loài để loại quả khác. Trên "
-     "ảnh mận mẫu, verifier loại bốn box sai; trên ảnh xoài đông quả mẫu, giữ bốn box. Chế độ quét "
-     "chi tiết tìm bốn box thay vì hai trên một ảnh xoài chồng lấp, vẫn bỏ sót quả bị che một phần. "
-     "Hỗ trợ ảnh tối chỉ được kiểm tra trên bộ tối tổng hợp, chưa có ảnh vườn đêm độc lập."),
-    ("Classifier", "Classifier xoài đúng 90,2% trên 234 crop test; trong 179 nhãn được chấp nhận có 174 "
-     "nhãn đúng. Thanh long đạt 100% trên 131 crop test của tập đã tuyển chọn. Không suy rộng con số "
-     "100% thành kết quả ngoài vườn: bộ ảnh vườn đánh giá detector hiện thiếu ground truth độ chín."),
-    ("Ảnh minh họa", "Ảnh bên trái cho thấy ba box thanh long trong một ảnh thử. Ảnh bên phải có "
-     "nhiều xoài nhỏ, một số nhãn uncertain. Mời người nghe nhìn vào box và vùng ảnh bị che khuất. "
-     "Các ảnh này giúp hiểu giao diện kết quả, nhưng không thay cho thống kê trên bộ test."),
-    ("Kiến trúc ứng dụng", "Frontend React và Ant Design nhận tệp và hiển thị kết quả. FastAPI kiểm tra "
-     "đầu vào, gọi pipeline PyTorch rồi trả JSON. ByteTrack là nhánh riêng cho video. Có thể chạy "
-     "backend và frontend tại máy hoặc đóng gói theo Docker/Modal như tài liệu dự án."),
-    ("Một yêu cầu ảnh", "Người dùng chọn ảnh và tùy chỉnh ngưỡng, frontend gửi FormData. API giới hạn 12 MB, "
-     "đọc EXIF và chuyển RGB rồi chạy detector, classifier, verifier. JSON trả về số lượng, danh sách "
-     "box và ảnh JPEG Base64. Frontend hiện ảnh kết quả và cảnh báo nếu API lỗi."),
-    ("Kiểm thử", "Nhóm kiểm tra dữ liệu trùng/chồng split, huấn luyện và đánh giá trên test. Các log web/API "
-     "ghi nhận việc khởi tạo model và phản hồi cho ảnh mẫu. Kiểm thử video hiện dùng clip tổng hợp từ "
-     "ảnh; cần video vườn thật có số quả chuẩn để đo sai số. Chỉ nói những gì log thực sự chứng minh."),
-    ("Video", "Video được giới hạn 50 MB, 30 giây, 1080p và lấy mẫu tối đa 5 fps. ByteTrack nối box theo "
-     "ID; mỗi ID có đủ quan sát được đếm một lần theo loài. ID có thể đổi khi che khuất hay camera "
-     "di chuyển, nên đầu ra là ước lượng. Không trình bày đây là độ chính xác đã kiểm chứng trên video vườn."),
-    ("Kết luận", "Nhóm đã có pipeline ảnh, ứng dụng web/API và tính năng đếm video. Điểm mới về thực "
-     "hành là tách hai nhiệm vụ, kiểm soát dữ liệu và trả uncertain cho độ chín. Bước tiếp theo là "
-     "thu ảnh/video từ đúng vườn mục tiêu, gắn nhãn độc lập và đo lại trước khi dùng thực tế."),
-    ("Nguồn và nhóm", "Điền tên, MSSV, giảng viên và phần việc thật trước khi nộp. Slide này liệt kê "
-     "các tệp để giảng viên có thể truy số liệu: README, log classifier test và benchmark detector. "
-     "Nếu được hỏi vì sao có nhiều tên lớp xoài, giải thích v3 đang cài khác bộ dữ liệu retrain mới."),
-    ("Kết thúc", "Cảm ơn thầy cô và các bạn. Mời đặt câu hỏi, sau đó demo một ảnh xoài, một ảnh thanh long "
-     "và một video ngắn nếu có kết nối và thời gian. Khi demo, mở /health trước để xác nhận pipeline_mode."),
-]
+FONT = "Times New Roman"
+BLACK = RGBColor(0, 0, 0)
+TEXT_WIDTH_CM = 21.59 - 2 * 2.54
 
 
-def add_box(slide, x, y, w, h, fill=WHITE, line=None, radius=True):
-    shape = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE,
-        Inches(x), Inches(y), Inches(w), Inches(h)
-    )
-    shape.fill.solid(); shape.fill.fore_color.rgb = fill
-    shape.line.fill.background() if line is None else None
-    if line is not None:
-        shape.line.color.rgb = line
-    return shape
+# ---------------------------------------------------------------- low-level helpers
+
+def set_font(run, size=None, bold=None, italic=None, color=None):
+    run.font.name = FONT
+    rpr = run._element.get_or_add_rPr()
+    fonts = rpr.find(qn("w:rFonts"))
+    if fonts is None:
+        fonts = OxmlElement("w:rFonts")
+        rpr.insert(0, fonts)
+    for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+        fonts.set(qn(attr), FONT)
+    if size is not None:
+        run.font.size = Pt(size)
+    if bold is not None:
+        run.bold = bold
+    if italic is not None:
+        run.italic = italic
+    if color is not None:
+        run.font.color.rgb = color
 
 
-def add_text(slide, text, x, y, w, h, size=20, color=INK, bold=False,
-             align=PP_ALIGN.LEFT, valign=MSO_ANCHOR.MIDDLE, margin=0.04):
-    box = slide.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h))
-    tf = box.text_frame; tf.clear(); tf.word_wrap = True
-    tf.margin_left = tf.margin_right = Inches(margin)
-    tf.margin_top = tf.margin_bottom = Inches(0.02)
-    tf.vertical_anchor = valign
-    for i, line in enumerate(text.split("\n")):
-        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-        p.text = line; p.alignment = align; p.space_after = Pt(6)
-        p.font.name = "Arial"; p.font.size = Pt(size); p.font.bold = bold
-        p.font.color.rgb = color
-    return box
+def add_runs(p, text, size=None, bold=False, italic=False):
+    """**x** marks bold segments inside text."""
+    for i, part in enumerate(text.split("**")):
+        if part:
+            set_font(p.add_run(part), size, bold or i % 2 == 1, italic)
 
 
-def add_picture_fit(slide, path, x, y, w, h):
-    from PIL import Image
-    with Image.open(path) as im:
-        iw, ih = im.size
-    scale = min(w / iw, h / ih)
-    pw, ph = iw * scale, ih * scale
-    return slide.shapes.add_picture(str(path), Inches(x+(w-pw)/2),
-                                    Inches(y+(h-ph)/2), Inches(pw), Inches(ph))
+def shade(cell, hex_fill):
+    tcpr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), hex_fill)
+    tcpr.append(shd)
 
 
-def new_slide(prs, title, kicker=None):
-    s = prs.slides.add_slide(prs.slide_layouts[6])
-    add_box(s, 0, 0, 13.333, 7.5, PALE, radius=False)
-    add_box(s, 0, 0, 13.333, 0.13, GREEN, radius=False)
-    if kicker:
-        add_text(s, kicker.split(" • ", 1)[-1].upper(), .65, .31, 10.5, .32, 11, GREEN, True)
-    add_text(s, title, .65, .72, 12.0, .65, 29, NAVY, True)
-    add_text(s, f"SMART ORCHARD AI  •  {len(prs.slides):02d}", .65, 7.12, 12, .18, 9, MUTED)
-    return s
+def keep_with_next(p):
+    p.paragraph_format.keep_with_next = True
 
 
-def card(s, x, y, w, h, label, body, accent=GREEN, body_size=17):
-    add_box(s, x, y, w, h, WHITE)
-    add_box(s, x, y, .09, h, accent, radius=False)
-    add_text(s, label, x+.23, y+.18, w-.48, .42, 20, accent, True)
-    add_text(s, body, x+.23, y+.74, w-.48, h-.88, body_size, INK,
-             valign=MSO_ANCHOR.TOP)
+class Report:
+    def __init__(self, page_map=None):
+        self.d = Document()
+        self.headings = []          # (level, text)
+        self.page_map = page_map or {}
+        self.fig = {}
+        self.tab = {}
+        self.chapter = 0
+        self._styles()
+
+    # ------------------------------------------------------------ styles & page
+    def _styles(self):
+        sec = self.d.sections[0]
+        sec.page_width, sec.page_height = Cm(21.59), Cm(27.94)
+        for side in ("top_margin", "bottom_margin", "left_margin", "right_margin"):
+            setattr(sec, side, Cm(2.54))
+        st = self.d.styles
+        normal = st["Normal"]
+        normal.font.name = FONT
+        normal.font.size = Pt(13)
+        normal.element.rPr.rFonts.set(qn("w:eastAsia"), FONT)
+        pf = normal.paragraph_format
+        pf.space_after = Pt(6)
+        pf.line_spacing = 1.3
+        for name, size in (("Heading 1", 15), ("Heading 2", 14), ("Heading 3", 13)):
+            h = st[name]
+            h.font.name = FONT
+            h.font.size = Pt(size)
+            h.font.bold = True
+            h.font.italic = False
+            h.font.color.rgb = BLACK
+            rpr = h.element.get_or_add_rPr()
+            fonts = rpr.find(qn("w:rFonts"))
+            if fonts is None:
+                fonts = OxmlElement("w:rFonts")
+                rpr.insert(0, fonts)
+            for attr in ("w:ascii", "w:hAnsi", "w:cs", "w:eastAsia"):
+                fonts.set(qn(attr), FONT)
+            for attr in ("w:asciiTheme", "w:hAnsiTheme", "w:eastAsiaTheme", "w:cstheme"):
+                if fonts.get(qn(attr)) is not None:
+                    del fonts.attrib[qn(attr)]
+            h.paragraph_format.space_before = Pt(14 if name == "Heading 1" else 10)
+            h.paragraph_format.space_after = Pt(6)
+            h.paragraph_format.keep_with_next = True
+        lb = st["List Bullet"]
+        lb.font.name = FONT
+        lb.font.size = Pt(13)
+        lb.paragraph_format.space_after = Pt(3)
+        lb.paragraph_format.line_spacing = 1.25
+
+    # ------------------------------------------------------------ blocks
+    def h(self, level, text):
+        if level == 1 and text.startswith("CHƯƠNG"):
+            self.chapter += 1
+        p = self.d.add_heading(level=level)
+        add_runs(p, text)
+        for r in p.runs:
+            set_font(r, None, True, False, BLACK)
+        self.headings.append((level, text))
+        return p
+
+    def chapter_heading(self, text):
+        # A trailing empty spacer (e.g. after a table that fills the page) would become a blank page.
+        body = self.d.element.body
+        last = body[-2] if len(body) > 1 and body[-1].tag == qn("w:sectPr") else body[-1]
+        if last.tag == qn("w:p") and not "".join(last.itertext()).strip() \
+                and not last.xpath(".//w:br | .//w:drawing"):
+            body.remove(last)
+        para = self.h(1, text)
+        para.paragraph_format.page_break_before = True
+        return para
+
+    def p(self, text, align=WD_ALIGN_PARAGRAPH.JUSTIFY, italic=False, size=None, indent=True):
+        para = self.d.add_paragraph()
+        para.alignment = align
+        if indent:
+            para.paragraph_format.first_line_indent = Cm(0.75)
+        add_runs(para, text, size=size, italic=italic)
+        return para
+
+    def bullets(self, items):
+        for it in items:
+            para = self.d.add_paragraph(style="List Bullet")
+            para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+            add_runs(para, it)
+
+    def caption(self, text):
+        para = self.d.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        para.paragraph_format.space_after = Pt(10)
+        add_runs(para, text, size=12, italic=True)
+        return para
+
+    def table(self, title, header, rows, widths_cm, size=11, highlight=None):
+        self.tab[self.chapter] = self.tab.get(self.chapter, 0) + 1
+        cap = self.d.add_paragraph()
+        cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        cap.paragraph_format.space_before = Pt(6)
+        cap.paragraph_format.space_after = Pt(4)
+        keep_with_next(cap)
+        add_runs(cap, f"**Bảng {self.chapter}.{self.tab[self.chapter]}.** {title}", size=12)
+        t = self.d.add_table(rows=1, cols=len(header))
+        t.style = "Table Grid"
+        t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        t.autofit = False
+        scale = TEXT_WIDTH_CM / sum(widths_cm) if sum(widths_cm) > TEXT_WIDTH_CM else 1
+        widths = [Cm(w * scale) for w in widths_cm]
+        for j, w in enumerate(widths):
+            t.columns[j].width = w      # grid widths (LibreOffice/Google Docs read these)
+        all_rows = [header] + list(rows)
+        for i, row in enumerate(all_rows):
+            cells = t.rows[0].cells if i == 0 else t.add_row().cells
+            for j, val in enumerate(row):
+                c = cells[j]
+                c.width = widths[j]
+                c.paragraphs[0].text = ""
+                lines = str(val).split("\n")
+                for k, line in enumerate(lines):
+                    para = c.paragraphs[0] if k == 0 else c.add_paragraph()
+                    para.paragraph_format.space_after = Pt(0)
+                    para.paragraph_format.line_spacing = 1.1
+                    add_runs(para, line, size=size, bold=(i == 0))
+                if i == 0:
+                    shade(c, "D9E7E1")
+                elif highlight and i in highlight:
+                    shade(c, "EAF5EE")
+        for row in t.rows:
+            trpr = row._tr.get_or_add_trPr()
+            cs = OxmlElement("w:cantSplit")
+            trpr.append(cs)
+        hdr = t.rows[0]._tr.get_or_add_trPr()
+        th = OxmlElement("w:tblHeader")
+        th.set(qn("w:val"), "true")
+        hdr.append(th)
+        gap = self.d.add_paragraph()
+        gap.paragraph_format.space_after = Pt(4)
+        return t
+
+    def figure(self, path, width_cm, title):
+        self.fig[self.chapter] = self.fig.get(self.chapter, 0) + 1
+        para = self.d.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        keep_with_next(para)
+        if Path(path).exists():
+            para.add_run().add_picture(str(path), width=Cm(width_cm))
+        else:
+            add_runs(para, f"(thiếu ảnh: {Path(path).name})", italic=True)
+        self.caption(f"**Hình {self.chapter}.{self.fig[self.chapter]}.** {title}")
+
+    def figure_row(self, paths, width_cm, title):
+        """Several images side by side in one centred paragraph."""
+        self.fig[self.chapter] = self.fig.get(self.chapter, 0) + 1
+        para = self.d.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        keep_with_next(para)
+        for i, path in enumerate(paths):
+            if Path(path).exists():
+                para.add_run().add_picture(str(path), width=Cm(width_cm))
+            if i < len(paths) - 1:
+                para.add_run("  ")
+        self.caption(f"**Hình {self.chapter}.{self.fig[self.chapter]}.** {title}")
+
+    def code(self, text):
+        para = self.d.add_paragraph()
+        para.paragraph_format.left_indent = Cm(0.75)
+        para.paragraph_format.line_spacing = 1.0
+        for k, line in enumerate(text.split("\n")):
+            r = para.add_run(line)
+            r.font.name = "Courier New"
+            r.font.size = Pt(10.5)
+            if k < len(text.split("\n")) - 1:
+                r.add_break()
+
+    def page_break(self):
+        self.d.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+
+    # ------------------------------------------------------------ cover, TOC, footer
+    def cover(self):
+        d = self.d
+
+        def line(text, size, bold=True, italic=False, before=0, after=6):
+            para = d.add_paragraph()
+            para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            para.paragraph_format.space_before = Pt(before)
+            para.paragraph_format.space_after = Pt(after)
+            para.paragraph_format.first_line_indent = Cm(0)
+            add_runs(para, text, size=size, bold=bold, italic=italic)
+            return para
+
+        line(UNIVERSITY, 25, before=11, after=0)
+        line(UNIT, 25, after=10)
+        lp = d.add_paragraph()
+        lp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        if LOGO.exists():
+            lp.add_run().add_picture(str(LOGO), width=Cm(9.3))
+        line("", 13, after=10)
+        line(REPORT_TYPE, 25, after=10)
+        line(COURSE, 16, after=10)
+        tp = d.add_paragraph()
+        tp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        tp.paragraph_format.space_before = Pt(11)
+        tp.paragraph_format.space_after = Pt(14)
+        set_font(tp.add_run("Tên đề tài: "), 14, True, False)
+        set_font(tp.add_run(f"\"{TOPIC}\""), 14, True, True)
+        line("", 13, after=14)
+        line("Nhóm học viên thực hiện:", 14, after=2)
+        for name, sid in MEMBERS:
+            line(f"{name} – Mã học viên: {sid}", 14, after=2)
+        line(f"Giảng viên hướng dẫn: {LECTURER}", 14, before=8, after=2)
+        for _ in range(3):
+            line("", 13, after=0)
+        line(PLACE_DATE, 16, after=0)
+        self.page_break()
+
+    def toc_placeholder(self):
+        """Reserve the TOC position; fill_toc() inserts entries once headings are known."""
+        para = self.d.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        para.paragraph_format.space_after = Pt(12)
+        add_runs(para, "MỤC LỤC", size=18, bold=True)
+        self._toc_anchor = self.d.add_paragraph()
+        self.page_break()
+
+    def fill_toc(self):
+        entries = [(lvl, txt) for lvl, txt in self.headings if lvl <= 2]
+        anchor = self._toc_anchor._p
+        paras = []
+        for lvl, txt in entries:
+            para = OxmlElement("w:p")
+            paras.append((para, lvl, txt))
+        # Build with python-docx Paragraph wrappers for formatting.
+        from docx.text.paragraph import Paragraph
+        prev = anchor
+        built = []
+        for el, lvl, txt in paras:
+            prev.addnext(el)
+            prev = el
+            para = Paragraph(el, self._toc_anchor._parent)
+            pf = para.paragraph_format
+            pf.left_indent = Cm(0 if lvl == 1 else 0.8)
+            pf.space_after = Pt(2)
+            pf.line_spacing = 1.15
+            pf.tab_stops.add_tab_stop(Cm(TEXT_WIDTH_CM), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+            page = self.page_map.get(txt, "…")
+            set_font(para.add_run(txt), 12 if lvl == 1 else 12, lvl == 1, False)
+            set_font(para.add_run(f"\t{page}"), 12, lvl == 1, False)
+            built.append(para)
+        # Wrap the entries in a TOC field so Word can refresh them (right click → Update field).
+        first, last = built[0], built[-1]
+        begin = OxmlElement("w:r")
+        fc = OxmlElement("w:fldChar"); fc.set(qn("w:fldCharType"), "begin"); begin.append(fc)
+        instr = OxmlElement("w:r")
+        it = OxmlElement("w:instrText"); it.set(qn("xml:space"), "preserve")
+        it.text = ' TOC \\o "1-2" \\h \\z \\u '
+        instr.append(it)
+        sep = OxmlElement("w:r")
+        fc2 = OxmlElement("w:fldChar"); fc2.set(qn("w:fldCharType"), "separate"); sep.append(fc2)
+        ppr = first._p.find(qn("w:pPr"))
+        idx = list(first._p).index(ppr) + 1 if ppr is not None else 0
+        for k, el in enumerate((begin, instr, sep)):
+            first._p.insert(idx + k, el)
+        end = OxmlElement("w:r")
+        fc3 = OxmlElement("w:fldChar"); fc3.set(qn("w:fldCharType"), "end"); end.append(fc3)
+        last._p.append(end)
+
+    def footer(self):
+        sec = self.d.sections[0]
+        sec.different_first_page_header_footer = True
+        fp = sec.footer.paragraphs[0]
+        fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r = fp.add_run()
+        set_font(r, 11)
+        for kind, text in (("begin", None), (None, " PAGE "), ("end", None)):
+            if kind:
+                fc = OxmlElement("w:fldChar")
+                fc.set(qn("w:fldCharType"), kind)
+                r._r.append(fc)
+            else:
+                it = OxmlElement("w:instrText")
+                it.set(qn("xml:space"), "preserve")
+                it.text = text
+                r._r.append(it)
+
+    def save(self, path):
+        self.fill_toc()
+        self.footer()
+        self.d.core_properties.title = "Báo cáo nhóm – Smart Orchard AI"
+        # python-docx's template writes <w:zoom> without the schema-required percent attribute.
+        for zoom in self.d.settings.element.findall(qn("w:zoom")):
+            zoom.set(qn("w:percent"), "100")
+        self.d.save(path)
 
 
-def detail_rows(s, rows, y0=1.55, row_h=.91, gap=.10):
-    """Compact, readable sequence of numbered facts for a technical slide."""
-    for i, (tag, title, body) in enumerate(rows):
-        y = y0+i*(row_h+gap)
-        add_box(s,.7,y,11.95,row_h,WHITE)
-        add_box(s,.7,y,1.18,row_h,GREEN if i%2==0 else NAVY)
-        add_text(s,tag,.82,y+.08,.93,row_h-.16,16,WHITE,True,PP_ALIGN.CENTER)
-        add_text(s,title,2.04,y+.11,3.0,row_h-.2,18,NAVY,True)
-        add_text(s,body,5.12,y+.10,7.23,row_h-.18,15,INK)
+# ---------------------------------------------------------------- content
 
+def write(R: Report):
+    P, B, H = R.p, R.bullets, R.h
 
-def build_pptx():
-    data = json.loads(METRIC_FILE.read_text())
-    benchmark = json.loads(REGRESSION_FILE.read_text())["models"]["v3"]["total"]
-    prs = Presentation(); prs.slide_width = Inches(13.333); prs.slide_height = Inches(7.5)
+    R.cover()
+    R.toc_placeholder()
 
-    s = prs.slides.add_slide(prs.slide_layouts[6])
-    add_box(s, 0, 0, 13.333, 7.5, NAVY, radius=False)
-    add_box(s, .65, .72, .14, 5.85, GOLD, radius=False)
-    add_text(s, "BÁO CÁO DỰ ÁN MÁY HỌC", 1.0, .83, 10.7, .36, 16, MINT, True)
-    add_text(s, "SMART ORCHARD AI", 1.0, 1.46, 11.2, .83, 38, WHITE, True)
-    add_text(s, "Nhận diện, đếm và đánh giá độ chín\ncủa xoài và thanh long trên cây",
-             1.0, 2.43, 10.7, 1.25, 25, WHITE)
-    add_text(s, TEAM, 1.0, 4.55, 11, .42, 17, MINT, True)
-    add_text(s, f"Môn học: {COURSE}  |  Năm học: {YEAR}", 1.0, 5.11, 11, .42, 15, WHITE)
-    add_text(s, "Bộ slide báo cáo nhóm • 10/2026", 1.0, 6.56, 11, .25, 11, MINT)
+    # ---------------- Lời mở đầu & tóm tắt
+    H(1, "LỜI MỞ ĐẦU")
+    P("Đếm quả và đánh giá độ chín trên cây là công việc tốn thời gian của người làm vườn. Với xoài và thanh long, "
+      "quả thường nhỏ trong ảnh chụp cả cây, bị lá che, chồng lên nhau và thay đổi màu theo ánh sáng. Nhóm chọn đề tài "
+      "Smart Orchard AI để xây dựng một hệ thống thị giác máy tính có thể nhận một ảnh hoặc một video ngắn, tìm từng quả, "
+      "đếm số quả và cho biết độ chín của từng quả — đồng thời biết nói \"chưa chắc chắn\" khi bằng chứng chưa đủ.")
+    P("Báo cáo này không chỉ trình bày kết quả cuối cùng. Nhóm ghi lại đúng quá trình đã diễn ra từ ngày 12/09 đến 08/10/2026: "
+      "mỗi lần huấn luyện dùng dữ liệu nào, cấu hình nào, đạt kết quả bao nhiêu, phát hiện vấn đề gì và vì sao phải chạy lại. "
+      "Tổng cộng có 8 vòng huấn luyện, 9 phiên bản dữ liệu, 17 nguồn dữ liệu công khai và 4 lần triển khai lên Google Cloud Run. "
+      "Mọi số liệu đều trích từ tệp trong dự án; danh sách tệp minh chứng nằm ở cuối báo cáo. Nhóm cảm ơn giảng viên hướng dẫn "
+      "và các tác giả dữ liệu mở (CQUniversity, Mendeley Data, Roboflow Universe, Wikimedia Commons).")
 
-    s = new_slide(prs, "Bài toán và mục tiêu", "01 • tổng quan")
-    card(s, .65, 1.61, 3.83, 4.6, "Quan sát tại vườn",
-         "Quả nhỏ, bị lá che và ánh sáng thay đổi khiến việc đếm thủ công khó ổn định.")
-    card(s, 4.75, 1.61, 3.83, 4.6, "Bài toán AI",
-         "Định vị quả trên ảnh; nhận diện xoài hoặc thanh long; phân loại giai đoạn chín từ vùng quả.", GOLD)
-    card(s, 8.85, 1.61, 3.83, 4.6, "Đầu ra sử dụng",
-         "Ảnh có khung và nhãn, số lượng theo lớp; video cho ước lượng số quả duy nhất.")
+    H(1, "TÓM TẮT")
+    P("Smart Orchard AI là pipeline hai giai đoạn: (1) detector YOLOv8s tìm quả xoài và thanh long trên ảnh 960 pixel; "
+      "(2) với mỗi quả, classifier YOLOv8s-cls riêng theo loài dự đoán độ chín (xoài: young, mature, turning, ripe; "
+      "thanh long: unripe, ripe, rotten). Xác suất được hiệu chỉnh bằng temperature scaling và ngưỡng riêng từng lớp; "
+      "dự đoán không đủ tin cậy hoặc quả quá nhỏ được gắn nhãn uncertain. Hệ thống có API FastAPI, giao diện React, "
+      "đếm quả trong video bằng ByteTrack và được triển khai trên Google Cloud Run; huấn luyện chạy trên Vertex AI.")
+    P("Mô hình đang dùng (v3, job Vertex AI 4169118715503181824) đạt mAP50 94,9% và recall 88,3% trên 2.037 ảnh test; "
+      "classifier xoài đúng 90,2% trên 234 crop, trong đó 179 crop được trả nhãn và 97,2% số nhãn đó đúng. Tuy nhiên, "
+      "trên benchmark có ảnh không chứa quả, precision chỉ 55,3%; recall trên ảnh cả cây dày quả khoảng 53–56%; "
+      "và bộ lọc loài thêm ngày 06/10 xóa nhầm 24/49 xoài chín. Báo cáo phân tích nguyên nhân của từng con số và các bước tiếp theo.")
+    P("**Từ khóa:** YOLOv8, phát hiện đối tượng, phân loại độ chín, hiệu chỉnh xác suất, temperature scaling, ByteTrack, "
+      "Vertex AI, Cloud Run.", indent=False)
 
-    s = new_slide(prs, "Phạm vi sản phẩm", "02 • chức năng")
-    items = [
-        ("01", "Ảnh tĩnh", "Phát hiện, đếm, hiển thị độ chín và vùng chưa chắc chắn."),
-        ("02", "Video ngắn", "ByteTrack ghép các khung hình để ước lượng số quả duy nhất."),
-        ("03", "Ứng dụng web", "React + Ant Design tải tệp, điều chỉnh ngưỡng và xem kết quả."),
-        ("04", "API", "FastAPI cung cấp /detect, /detect-video, /health và /docs."),
+    # ---------------- Chương 1
+    R.chapter_heading("CHƯƠNG 1. GIỚI THIỆU")
+    H(2, "1.1. Bối cảnh và bài toán")
+    P("Ảnh vườn đặt ra bốn khó khăn chính. Thứ nhất, khi chụp cả cây, mỗi quả chỉ chiếm khoảng 10–25 pixel — đây là con số "
+      "nhóm đo được ngày 24/09 khi mô hình đầu tiên thất bại. Thứ hai, quả bị lá che và chồng lên nhau. Thứ ba, ánh sáng thay "
+      "đổi, có cả ảnh chụp đêm, làm màu quả — tín hiệu chính của độ chín — kém ổn định. Thứ tư, các loại quả khác như vải, "
+      "chôm chôm, mận có hình dạng và màu gần giống.")
+    H(2, "1.2. Mục tiêu và đầu ra")
+    B(["Tìm vị trí (bounding box) và loài của từng quả: xoài hoặc thanh long.",
+       "Phân loại độ chín: xoài 4 mức (young – non, mature – già xanh, turning – đang chuyển màu, ripe – chín); thanh long "
+       "3 mức (unripe, ripe, rotten).",
+       "Trả nhãn **mango_uncertain / dragonfruit_uncertain** khi quả quá nhỏ hoặc độ tin cậy chưa đủ, thay vì đoán bừa.",
+       "Đếm số quả theo lớp trong ảnh; ước lượng số quả duy nhất trong video ngắn.",
+       "Cung cấp giao diện web và API để người dùng thử ảnh, video."])
+    H(2, "1.3. Phạm vi và giới hạn")
+    B(["Chỉ hai loài quả mục tiêu; quả khác nằm ngoài phạm vi (nhưng hệ thống cố gắng không báo nhầm).",
+       "Ảnh JPG/PNG/WEBP tối đa 12 MB; video MP4/MOV/WebM/AVI tối đa 50 MB, 30 giây, 1080p.",
+       "Hệ thống hỗ trợ quan sát, chưa thay thế việc kiểm tra tại vườn vì nhóm chưa có ảnh có nhãn từ chính vườn mục tiêu.",
+       "Dữ liệu từ v2 trở đi có bộ MangoFruitBD giấy phép phi thương mại, nên mô hình chỉ dùng cho học tập, nghiên cứu."])
+    H(2, "1.4. Thuật ngữ")
+    R.table("Thuật ngữ dùng trong báo cáo", ["Thuật ngữ", "Ý nghĩa"], [
+        ("Detector", "Mô hình YOLOv8s tìm box và loài quả (2 lớp)."),
+        ("Classifier", "Mô hình YOLOv8s-cls phân loại độ chín từ ảnh cắt (crop) của một quả, riêng cho từng loài."),
+        ("Precision / Recall", "Tỉ lệ box dự đoán là đúng / tỉ lệ quả thật được tìm thấy (khớp khi IoU ≥ 0,5)."),
+        ("mAP50, mAP50-95", "Độ chính xác trung bình ở ngưỡng IoU 0,5 và trung bình trên IoU 0,5–0,95 (chặt hơn)."),
+        ("Calibration (hiệu chỉnh)", "Điều chỉnh xác suất của mô hình để \"80% tin cậy\" nghĩa là đúng khoảng 80%."),
+        ("Temperature T", "Hệ số chia log-xác suất trước softmax; T > 1 làm mô hình bớt tự tin."),
+        ("ECE", "Expected Calibration Error: sai lệch trung bình giữa độ tin cậy và tỉ lệ đúng thực tế."),
+        ("Uncertain", "Quả vẫn được đếm nhưng không trả nhãn độ chín vì quá nhỏ hoặc chưa đủ tin cậy."),
+        ("Ảnh âm tính", "Ảnh không có xoài hay thanh long (vải, táo, hoa…), dùng để đo box sai."),
+        ("Rò rỉ dữ liệu (leakage)", "Ảnh giống nhau nằm ở cả train và test, làm kết quả test cao giả."),
+    ], [4.0, 12.5])
+
+    # ---------------- Chương 2
+    R.chapter_heading("CHƯƠNG 2. QUÁ TRÌNH PHÁT TRIỂN DỰ ÁN")
+    P("Chương này dựng lại quá trình từ lịch sử Git, tệp docs/PROJECT_HISTORY.md, các thư mục kết quả của từng job Vertex AI "
+      "và báo cáo chuẩn bị dữ liệu. Thời gian theo giờ Việt Nam.")
+    H(2, "2.1. Dòng thời gian")
+    R.table("Các mốc chính của dự án", ["Ngày", "Sự kiện", "Kết quả / quyết định"], [
+        ("12/09", "Vòng 0: YOLOv8s 4 lớp trên Colab (commit a1e93c4)", "mAP50 91,3% nhưng bị rò rỉ split"),
+        ("18–20/09", "Vòng 1: 7 lớp; checkpoint bị ghi đè, khôi phục từ Drive", "mAP50 val 85,4%"),
+        ("20–24/09", "Thử Modal thất bại; triển khai Cloud Run đầu tiên", "~7,6 giây/ảnh"),
+        ("24/09", "Thử ảnh thật cả cây: kết quả rất tệ", "Đổi sang pipeline hai giai đoạn (f2c43ab)"),
+        ("25–27/09", "Vòng 2: hai giai đoạn trên Colab", "Thất bại; log bị mất"),
+        ("28/09", "Sửa dữ liệu (polygon, nhãn nhiễu); chuyển sang Vertex AI; v2", "Xoài chỉ 63,9%"),
+        ("29/09", "v3: lớp xoài theo hình thức + ảnh cả cây", "Mô hình đang dùng"),
+        ("30/09", "v4: detector 1280 px, thêm ảnh âm tính", "Checkpoint FP16 hỏng, loại"),
+        ("02/10", "Benchmark cố định, rà nhãn, thử nghiệm A/B/C", "Không bản nào thay v3"),
+        ("03/10", "Cloud Run chạy v3 + giao diện điện thoại", "1,4–1,8 giây/ảnh"),
+        ("05–06/10", "Video, ảnh tối, quét kỹ, bộ lọc loài", "Bản fix4"),
+        ("08/10", "Đánh giá lại toàn bộ pipeline", "Bộ lọc xóa nhầm xoài chín"),
+    ], [2.2, 8.5, 5.8], highlight={7})
+    H(2, "2.2. Tổng hợp các vòng huấn luyện")
+    R.table("Kết quả và lý do phải chạy lại của từng vòng", ["Vòng", "Ngày • nơi chạy", "Kết quả chính", "Vấn đề → lý do chạy lại"], [
+        ("0 · 4 lớp", "12/09 • Colab T4", "Test mAP50 91,3%", "456 ảnh gốc có bản sao ở nhiều tập → số ảo"),
+        ("1 · 7 lớp", "18–20/09 • Colab", "Val mAP50 85,4%", "Ảnh cả cây tìm 0–7 quả; một mô hình làm hai việc"),
+        ("2 · hai giai đoạn", "25–27/09 • Colab", "Không còn số liệu", "Polygon đọc thành box; Colab ngắt; nhãn nhiễu"),
+        ("v2", "28/09 • Vertex V100", "Det mAP50 98,5%; xoài 63,9%", "Nhãn xoài theo tuổi quả; ảnh rộng chỉ thấy 3/~40 quả"),
+        ("v3 (đang dùng)", "29/09 • Vertex V100", "Det mAP50 94,9%; xoài 90,2%", "Nhận nhầm vải/táo; trụ thanh long dày ~53%"),
+        ("v4", "30/09 • Vertex V100", "Val 93,3% → tải lại 31,4%", "Checkpoint FP16 hỏng; xoài chín 11 → 0 quả"),
+        ("A / B / C", "02/10 • Vertex V100", "Precision 55% → 66–68%", "Vẫn mất xoài nhỏ/đỏ (11 → 4) → giữ v3"),
+        ("Bộ lọc loài", "06/10 • CPU laptop", "Box sai 1.103 → 264", "Xóa 24/49 xoài chín → cần huấn luyện lại"),
+    ], [2.6, 3.2, 4.2, 6.5], highlight={5})
+
+    H(2, "2.3. Vòng 0 (12/09): YOLOv8s 4 lớp")
+    P("Bản đầu tiên dùng hai bộ dữ liệu xuất từ Roboflow: bộ xoài có bốn giai đoạn (Premature, early-fruit, mature, ripe) và "
+      "bộ thanh long có Unripe, Ripe, Rotten. Nhóm gộp ba giai đoạn xanh của xoài thành mango_unripe, bỏ lớp Rotten, còn 4 lớp: "
+      "mango_unripe, mango_ripe, dragonfruit_unripe, dragonfruit_ripe. Mô hình YOLOv8s huấn luyện 30 epoch trên Colab T4 với AdamW. "
+      "Một quyết định được giữ suốt dự án: **hsv_h = 0**, tức không xoay sắc độ (hue) khi tăng cường dữ liệu, vì xoay hue biến xoài xanh "
+      "thành vàng — tức đổi luôn nhãn độ chín.")
+    P("Kết quả trên 714 ảnh test: precision 95,6%, recall 85,1%, mAP50 91,3%, mAP50-95 77,7%. Sau đó nhóm phát hiện bộ xoài có "
+      "2.004 ảnh nhưng chỉ sinh ra từ 926 ảnh gốc (Roboflow tạo các bản xoay, lật), và **456 ảnh gốc có bản sao nằm ở nhiều tập**. "
+      "Mô hình được kiểm tra trên ảnh gần như đã thấy, nên con số 91,3% không dùng được. Ngoài ra xoài vàng sau thu hoạch bị gọi là "
+      "\"unripe\" và ảnh kết quả bị đổi màu xanh lơ do lẫn thứ tự kênh BGR/RGB.")
+    P("**Lý do chạy lại:** chia dữ liệu theo ảnh gốc — mọi bản sao có cùng phần tên trước \".rf.\" phải nằm chung một tập — và "
+      "tách độ chín xoài chi tiết hơn.")
+
+    H(2, "2.4. Vòng 1 (18–20/09): 7 lớp trên Colab")
+    P("Notebook Colab mới dùng 7 lớp: mango_premature, mango_early, mango_mature, mango_ripe, dragonfruit_unripe, dragonfruit_ripe, "
+      "dragonfruit_rotten. Nhãn các bộ được ánh xạ theo tên lớp, không theo ID số. Cấu hình: YOLOv8s, 80 epoch, ảnh 640 px, batch 16, "
+      "AdamW, seed 42; khoảng 76 giây mỗi epoch, tổng 1 giờ 39 phút trên GPU.")
+    B(["**Sự cố 1:** Colab miễn phí hay ngắt và xóa checkpoint → ghi checkpoint thẳng lên Google Drive, thêm ô resume (commit 98348dc).",
+       "**Sự cố 2:** một lần chạy nhầm trên CPU với cùng tên run và exist_ok=True ghi đè best.pt 80 epoch bằng mô hình 1 epoch "
+       "(mAP50 0,027; 8.745 giây/epoch). Nhóm khôi phục được file từ lịch sử phiên bản của Google Drive.",
+       "**Kết quả:** validation precision 82,6%, recall 81,3%, mAP50 85,4%, mAP50-95 75,2%. Chưa chạy test. Lớp premature hay bị nhầm với mature.",
+       "**Bài học:** kiểm tra có GPU trước khi chạy, mỗi lần một tên run mới, exist_ok=False, lưu định kỳ."])
+    P("Mô hình này vẫn được giữ làm baseline (backend/weights/fruit_yolov8s_7class.pt, chọn bằng PIPELINE_MODE=legacy).")
+
+    H(2, "2.5. Triển khai đầu tiên (20–24/09)")
+    P("Nhóm thử Modal trước: lần đầu lỗi \"Token missing\", lần sau lỗi vượt giới hạn chi tiêu vì gói miễn phí giới hạn $0 khi chưa "
+      "gắn thẻ. Tạm thời backend chạy trên laptop qua Cloudflare quick tunnel. Ngày 24/09 nhóm triển khai lên Google Cloud Run "
+      "(asia-southeast1, CPU, tự tắt khi không có người dùng). Hai lỗi phải sửa: service account của Cloud Build không đọc được "
+      "mã nguồn (cấp role Cloud Run Builder) và chính sách tổ chức chặn truy cập công khai (cờ --no-invoker-iam-check). Revision "
+      "fruit-detection-00001-z2h chạy khoảng 7,6 giây/ảnh và vẫn được giữ để rollback.")
+
+    H(2, "2.6. Phân tích thất bại ngày 24/09")
+    P("Có bản web thật, nhóm thử ngay bốn ảnh chụp thực tế. Kết quả ở bảng dưới đây cho thấy mô hình 7 lớp không dùng được trên ảnh cả cây.")
+    R.table("Số box mô hình 7 lớp tìm được trên ảnh thật", ["Ảnh thử", "conf 0,25", "conf 0,80", "conf 0,90"], [
+        ("Thanh long cận cảnh", "3", "2", "1"),
+        ("Cả trụ thanh long", "0", "0", "0"),
+        ("Cây xoài (hàng chục quả)", "7", "0", "0"),
+        ("Xoài chín", "2 (gọi là mature)", "0", "0"),
+    ], [7.0, 3.2, 3.2, 3.2])
+    P("Nhóm tìm ra ba nguyên nhân:")
+    B(["**Lệch miền dữ liệu:** ảnh huấn luyện là ảnh cận cảnh 640 px; trên ảnh cả cây mỗi quả chỉ 10–25 px.",
+       "**Confidence chưa hiệu chỉnh:** F1 tốt nhất ở ngưỡng khoảng 0,42, nên đòi 80–90% là mất gần hết box.",
+       "**Một mô hình làm hai việc:** vừa tìm quả vừa phân biệt 7 mức chín; độ chính xác theo mức chỉ khoảng 56% (premature), "
+       "67% (mature), 84% (ripe)."])
+    P("Từ đây nhóm quyết định tách việc tìm quả và việc đánh giá độ chín thành hai mô hình riêng (Chương 4).")
+
+    H(2, "2.7. Vòng 2 (24–27/09): hai giai đoạn trên Colab")
+    P("Pipeline hai giai đoạn (commit f2c43ab) được huấn luyện lần đầu trên Colab, có thêm dữ liệu MangoYOLO, CQU on-tree và bộ "
+      "thanh long Mendeley; 630/2.127 ảnh thanh long gốc bị loại vì trùng từng byte. Detector và classifier xoài chạy xong, "
+      "classifier thanh long lỗi. Resume hỏng vì Ultralytics đánh dấu run đã xong bằng epoch = −1 (sửa ở commit 237fd8f); "
+      "runtime ngắt; runtime mới không thấy file zip trên Drive. Ngày 27/09 thử trên ảnh trên cây, kết quả vẫn rất tệ; log các "
+      "phiên Colab này bị mất nên không còn số liệu.")
+    P("Nguyên nhân gốc tìm ra ngày 28/09: bộ thanh long Roboflow xuất dưới tên \".yolov8\" nhưng chứa **polygon phân đoạn**, và "
+      "code cũ đọc nhầm polygon thành box (Mục 3.3). Mọi checkpoint detector và thanh long trước đó phải bỏ. Nhóm quyết định "
+      "**dừng huấn luyện để sửa dữ liệu trước**.")
+
+    # ---------------- Chương 3
+    R.chapter_heading("CHƯƠNG 3. DỮ LIỆU VÀ CHUẨN BỊ")
+    P("Ba vòng thất bại đầu tiên đều do dữ liệu chứ không do mô hình. Chương này trình bày các nguồn dữ liệu, lỗi đã phát hiện, "
+      "cách sửa được viết thành code, và 9 phiên bản dữ liệu.")
+    H(2, "3.1. Nguồn dữ liệu")
+    P("Danh sách lấy từ data/external/datasets.json, data/external/README.md và các báo cáo kiểm toán. Cột \"Từ\" cho biết phiên "
+      "bản dữ liệu đầu tiên dùng nguồn đó.")
+    R.table("Các nguồn dữ liệu dùng trong dự án", ["Bộ dữ liệu (mã / địa chỉ)", "Nội dung", "Giấy phép", "Cách dùng • từ"], [
+        ("Roboflow xoài (export gốc)", "2.004 ảnh từ 926 ảnh gốc; 4 giai đoạn", "CC BY 4.0", "Detector + classifier xoài • vòng 0"),
+        ("Roboflow thanh long (export gốc)", "3.007 ảnh; Unripe/Ripe/Rotten; nhãn polygon", "CC BY 4.0", "Từ v2 chỉ giữ crop quả nổi bật • vòng 0"),
+        ("MangoYOLO – CQUniversity (acquire.cqu.edu.au, 13450661)", "1.730 ảnh, 15.281 box, chụp đêm có đèn", "CC BY 4.0", "Chỉ detector • 24/09"),
+        ("CQU on-tree mango segmentation (21655628)", "542 tile tán cây, 5.314 mask", "CC BY 4.0", "Detector, mask → box • 24/09"),
+        ("Mendeley 2jpzbx8tm6 – Dragon Fruit Maturity", "2.127 ảnh gốc Immature/Mature", "CC BY 4.0", "Classifier thanh long; bỏ từ v2"),
+        ("Mendeley 2jpzbx8tm6 – Dragon Fruit Quality", "1.652 ảnh Fresh/Defect", "CC BY 4.0", "Không dùng: Fresh/Defect ≠ chín/hỏng"),
+        ("DF pose v2 – Mendeley t8kbmg6cgz", "2.448 frame vườn, 4.637 box, 7 video", "CC BY 4.0", "Detector thanh long • orchard_v1"),
+        ("MangoFruitBD v2 – Mendeley bhrz29mkmr", "1.070 ảnh xoài ban ngày, 1.841 box", "CC BY-NC", "Detector • orchard_v1"),
+        ("DF-MOD Black_Rot – Mendeley kpsywfwkrf", "675 file, chỉ 270 ảnh khác nhau", "CC BY 4.0", "Thanh long rotten • v2"),
+        ("Mendeley gcgrjvwmm2 – far-field mango", "1.023 ảnh xoài chụp xa/gần", "CC BY 4.0", "Detector • v3"),
+        ("Mendeley mm8g66d7rc – mango ripening", "951 ảnh xoài chín dần trên bàn", "chưa ghi", "Classifier (turning) • v3"),
+        ("Roboflow mango-tree (jerng-mi)", "690 ảnh cả cây, ~13 quả/ảnh", "CC BY 4.0", "Detector • v3"),
+        ("Roboflow pitaya \"goodgoodgood\"", "992 ảnh hàng thanh long", "CC BY 4.0", "Detector • v3"),
+        ("Roboflow ripe-dragon-fruits", "97 ảnh trụ thanh long chín", "CC BY 4.0", "Detector • v3"),
+        ("Roboflow thanh-long-detection", "5.534 ảnh; 19 tên lớp lộn xộn", "CC BY 4.0", "Detector • v4"),
+        ("10 nguồn ảnh âm tính (Roboflow)", "1.428 ảnh vải, chôm chôm, lựu, táo, cà chua, hoa thanh long", "CC BY 4.0 / MIT", "Ảnh không có quả • v4"),
+        ("Wikimedia Commons", "11 ảnh xoài đỏ/trên cây, tự gán box", "CC0 / BY / BY-SA", "Detector • recovery C"),
+    ], [5.2, 4.8, 2.2, 4.3], size=10.5)
+    P("Hai điểm cần lưu ý về giấy phép: MangoFruitBD là CC BY-NC (phi thương mại; trang tải ghi 3.0, tệp README trong bộ ghi 4.0), "
+      "và giấy phép của bộ Mendeley mm8g66d7rc chưa được ghi trong tệp nào của dự án — nhóm cần bổ sung trước khi công bố.")
+
+    H(3, "3.1.1. Bộ DF pose là gì")
+    P("DF pose (\"Dragon Fruit pose dataset v2\", tác giả Xing Yang) được gán nhãn cho bài toán ước lượng tư thế quả: mỗi dòng nhãn "
+      "có 17 số theo định dạng YOLO-pose — lớp, 4 số của box và 4 keypoint × (x, y, độ hiển thị). Dự án chỉ cần vị trí quả nên "
+      "script download_orchard_datasets.py chỉ giữ 5 số đầu, hai lớp tư thế được gộp thành dragonfruit, và hàm nạp "
+      "load_orchard_detection kiểm tra mỗi dòng đúng 5 số. Quả trong bộ này rất nhỏ (box trung vị chiếm 0,62% diện tích ảnh) — "
+      "đúng kiểu ảnh mô hình 7 lớp đã thất bại. Vì 2.448 frame chỉ đến từ 7 video, mọi frame của một video phải nằm chung một tập.")
+
+    H(2, "3.2. Các lỗi dữ liệu đã tìm và sửa ngày 28/09")
+    B(["**Polygon đọc thành box:** đổi mỗi polygon thành box bao ngoài; kiểm tra tọa độ trong [0, 1]; bỏ box diện tích 0.",
+       "**Nhãn thanh long nhiễu:** kiểm toán tìm 145 nhãn độ chín mâu thuẫn với nhãn nguồn và 703 box nhỏ hơn 1% diện tích ảnh; "
+       "cuống xanh bị gán Unripe, mảnh vụn bị gán Rotten. Chỉ giữ quả nổi bật, crop ≥ 64 px; ảnh mâu thuẫn bị cách ly.",
+       "**Thiếu ảnh ngoài vườn:** thêm DF pose v2 và MangoFruitBD; frame cùng video chung một tập.",
+       "**Thiếu quả hỏng thật:** thêm Black_Rot; 675 file chỉ có 270 ảnh duy nhất (bỏ 405 bản sao), gom 3 cặp chụp cùng quả.",
+       "**Cổng sẵn sàng:** mỗi lớp cần ≥ 80 nhóm ảnh gốc ở train và ≥ 20 ở val/calib/test, nếu không script từ chối huấn luyện."])
+    P("Kết quả là bộ maturity_v2: detector 10.438 ảnh, classifier xoài 2.534 crop, thanh long 1.416 crop; 22 test tự động pass.")
+
+    H(2, "3.3. Lỗi polygon đọc thành box")
+    P("Nhãn YOLO có hai dạng. Dạng box có đúng 5 số: lớp, x_tâm, y_tâm, rộng, cao. Dạng polygon có lớp rồi danh sách các điểm "
+      "(x, y) chạy quanh viền quả. Bộ thanh long được xuất dưới tên \".yolov8\" nên trông như box nhưng thực ra là polygon. "
+      "Hàm read_yolo_boxes ở commit f2c43ab chỉ lấy 4 số sau mã lớp (parts[1:5]) và coi là box, tức tọa độ điểm 1 bị hiểu thành "
+      "tâm, tọa độ điểm 2 bị hiểu thành rộng và cao. Ví dụ dòng polygon:")
+    R.code("1  0.41 0.27  0.55 0.25  0.61 0.38  0.58 0.52  0.44 0.55  0.39 0.41")
+    P("bị đọc thành box tâm (0,41; 0,27), rộng 0,55, cao 0,25 — sai hoàn toàn. Box đúng (bao ngoài các điểm) là x từ 0,39 đến "
+      "0,61, y từ 0,25 đến 0,55, tức tâm (0,50; 0,40), rộng 0,22, cao 0,30. Bản sửa trong training/prepare_two_stage_data.py nhận "
+      "diện dòng có ≥ 7 số và tổng số giá trị lẻ là polygon, lấy min/max của các điểm để tạo box; test "
+      "training/test_prepare_two_stage_data.py giữ cho lỗi không quay lại.")
+
+    H(2, "3.4. Chín phiên bản dữ liệu")
+    R.table("Số ảnh detector và thay đổi qua từng phiên bản (preparation_report.json)",
+            ["Phiên bản", "Ngày", "Detector train / val / test", "Thay đổi chính và lý do"], [
+        ("two_stage_public", "24/09", "1.570 / 354 / 342", "Chỉ có box xoài; lỗi polygon chưa phát hiện"),
+        ("orchard_v1", "28/09", "7.522 / 1.610 / 1.663", "Thêm DF pose, MangoFruitBD; chia frame theo video"),
+        ("maturity_v2", "28/09", "7.272 / 1.556 / 1.610", "Rà thanh long; cách ly 1.406 nhãn Fresh/Defect; Black_Rot"),
+        ("maturity_v3 (đang dùng)", "29/09", "9.231 / 1.972 / 2.037", "+2.802 ảnh cả cây; lớp xoài theo hình thức"),
+        ("detector_v4", "30/09", "14.094 / 3.016 / 3.077", "+5.534 thanh-long, +1.428 ảnh âm tính; 3 ảnh test rò rỉ"),
+        ("v5_audit (A)", "02/10", "13.551 / 2.735 / 2.819", "Cách ly 1.082 ảnh có split/nhãn mâu thuẫn"),
+        ("v5 bỏ âm tính giống (B)", "02/10", "13.278 / 2.735 / 2.819", "A bỏ 273 ảnh táo/lựu/cà chua"),
+        ("v5_label_review", "02/10", "12.255 / 2.735 / 2.819", "Bỏ 1.604 box trùng; chưa đủ điều kiện huấn luyện"),
+        ("v5_recovery_c (C)", "02/10", "9.183 / 2.735 / 2.819", "50 nhãn sửa ×4, 11 ảnh xoài ×16, thanh-long ≤ 600"),
+    ], [3.8, 1.5, 4.0, 7.2], size=10.5, highlight={4})
+    P("Với v3, classifier xoài có 2.688 / 351 / 235 / 234 crop (train / val / calib / test; train gồm young 1.119, mature 900, "
+      "turning 155, ripe 514) và classifier thanh long 958 / 196 / 131 / 131 (giữ như v2). Từ thử nghiệm A trở đi, tập val và "
+      "test được giữ giống hệt từng byte để mọi mô hình được so trên cùng một bộ.")
+
+    H(2, "3.5. Quy tắc chất lượng viết thành code")
+    R.table("Các quy tắc dữ liệu và nơi cài đặt", ["Quy tắc", "Cài đặt"], [
+        ("Chống rò rỉ", "rf_group_id gom mọi bản \".rf.\" của một ảnh gốc; assert_no_group_leakage dừng nếu một nhóm nằm ở hai tập"),
+        ("Bản sao gần giống", "fingerprint + cluster_records (dHash 64 bit, cả ảnh lật; lệch ≤ 4 bit và màu lệch ≤ 12) → gom nhóm; cụm lẫn nhãn bị cách ly"),
+        ("Quả nổi bật", "dominant_fruit: box lớn nhất ≥ 10% ảnh, cạnh ≥ 64 px, tỉ lệ 0,25–4, các box khác nằm ≥ 90% trong nó"),
+        ("Nhãn đúng nghĩa", "curate_dragon: nhãn box phải khớp nhãn nguồn; Fresh/Defect không bao giờ thành ripe/rotten"),
+        ("Đủ dữ liệu mới train", "MIN_GROUPS = 80 / 20 / 20 / 20 nhóm mỗi lớp; thiếu thì \"BLOCKED\""),
+        ("Giữ màu", "hsv_h = 0 và tắt auto_augment của classifier (auto_augment tự thêm biến đổi màu)"),
+        ("Chia tập", "Detector 70/15/15; classifier 65/15/10/10 (train/val/calib/test), phân tầng theo nguồn và lớp"),
+    ], [3.8, 12.7], size=11)
+
+    H(3, "3.5.1. dHash – tìm ảnh gần giống")
+    P("dHash (difference hash) là một thuật toán tạo \"dấu vân tay\" cho ảnh, nhóm tự cài trong khoảng 10 dòng ở hàm fingerprint() "
+      "của training/maturity_data.py, chỉ dùng Pillow để thu nhỏ ảnh. Ảnh được chuyển xám, thu về 9×8 pixel; trên mỗi hàng so từng "
+      "pixel với pixel bên phải (sáng hơn ghi 1, không thì 0) được số 64 bit. Làm thêm với ảnh lật ngang và giữ giá trị nhỏ hơn để "
+      "ảnh lật vẫn ra cùng dấu vân tay; kèm một ảnh màu 8×8 để so màu. Hai ảnh bị coi là bản sao nếu số 64 bit khác không quá "
+      "4 bit và màu lệch trung bình không quá 12 (thang 0–255). SHA256 chỉ bắt được ảnh trùng từng byte; dHash bắt được cả bản "
+      "resize, nén lại, lật — nhờ vậy ngày 30/09 tìm ra 76/830 ảnh test của v4 có ảnh gần giống trong train. Giới hạn: hai ảnh "
+      "chụp cùng quả từ hai góc có dHash khác xa nhau, nên 3 cặp Black_Rot phải được xác định bằng mắt (BLACK_ROT_VIEW_PAIRS).")
+
+    H(2, "3.6. Rà soát nhãn detector (02/10)")
+    P("Sau thất bại của v4, nhóm rà lại nhãn bằng hai script trong worktree gcp-vertex-training. "
+      "**training/audit_detector_labels.py** chỉ đọc ảnh train và (1) kiểm tra tự động: thiếu tệp, dòng không phải số, lớp khác 0/1, "
+      "box tràn ra ngoài ảnh, box trùng hệt nhau, số box lệch manifest, box có cạnh < 12 px khi ảnh về 960 px; (2) thống kê theo "
+      "nguồn và so với bộ cũ; (3) chọn ngẫu nhiên 24 ảnh mỗi nguồn với seed cố định và vẽ box lên ảnh thành các trang 3×4 "
+      "(xanh lá: xoài, xanh lơ: thanh long). Đợt 02/10 tạo 54 trang với 603 ảnh.")
+    P("Người xem ghi quyết định vào review_decisions.json kèm hash ảnh, hash nhãn và lý do. **training/apply_detector_label_review.py** "
+      "từ chối chạy nếu hash không khớp, chỉ cho cách ly ảnh train, cách ly cả nhóm (một frame lỗi kéo theo cả video), xóa box "
+      "trùng, copy nguyên val/test và ghi ra một bộ dữ liệu mới. Kết quả rà:")
+    B(["5 ảnh ghi \"không có quả\" thật ra có xoài; 12 ảnh thiếu hoặc lệch box (7 frame thanh long bỏ sót quả xanh hoặc đỏ).",
+       "28 ảnh của nguồn \"hoa thanh long ban đêm\" là tranh vẽ, không phải ảnh vườn thật.",
+       "1.604 box trùng hệt nhau trong 290 ảnh xoài trên cây (đã có từ v3).",
+       "Tỉ lệ ảnh có xoài trong train giảm từ 53,1% xuống 36,0% sau khi thêm bộ thanh-long."])
+    P("Lưu ý trung thực: theo PROJECT_HISTORY.md, việc xem bằng mắt lần này do trợ lý AI (Codex) thực hiện, không có người gán nhãn "
+      "thứ hai kiểm tra lại; script cũng ghi rõ xem ảnh thu nhỏ không chứng nhận được mọi box đều đúng.")
+
+    # ---------------- Chương 4
+    R.chapter_heading("CHƯƠNG 4. PHƯƠNG PHÁP VÀ KIẾN TRÚC")
+    H(2, "4.1. Pipeline hai giai đoạn")
+    P("Thiết kế từ ngày 24/09 (commit f2c43ab) tách bài toán thành hai bước, mỗi bước có chỉ số riêng:")
+    B(["**Detector** YOLOv8s 2 lớp (mango, dragonfruit) ở 960 px, ngưỡng confidence thấp 0,25 để không bỏ sót quả nhỏ; ảnh rất nhỏ "
+       "chỉ được phóng to tối đa khoảng 2 lần.",
+       "**Bộ lọc loài** (thêm 06/10, tùy chọn): YOLOv8n-cls 224 px với ba lớp mango / dragonfruit / other; loại box có P(other) ≥ 0,90.",
+       "**Cắt quả:** nới box 10%; crop có cạnh < 64 px vẫn được đếm nhưng gắn uncertain (crop_too_small).",
+       "**Classifier theo loài** YOLOv8s-cls 320 px; xác suất chia cho nhiệt độ T rồi so với ngưỡng (Mục 4.3).",
+       "**Kết quả:** box, nhãn, độ tin cậy, lý do uncertain, số lượng theo lớp và ảnh đã vẽ box."])
+    P("Lợi ích: biết lỗi nằm ở bước nào; dùng được bộ chỉ có box (MangoYOLO) cho detector và bộ chỉ có nhãn ảnh (Black_Rot) cho "
+      "classifier; hệ thống vẫn đếm quả nhưng chỉ nói độ chín khi đủ chắc.")
+
+    H(2, "4.2. Hiệu chỉnh xác suất")
+    P("Nhãn uncertain **không được huấn luyện như một lớp**. Classifier chỉ học các lớp thật; uncertain là quyết định lúc suy luận dựa "
+      "trên hai đại lượng tính trên một tập calibration riêng (không dùng để train, không dùng để test), cài trong hàm "
+      "calibrate_classifier của training/train_two_stage.py:")
+    B(["**Temperature T:** chia log-xác suất cho T rồi softmax lại; T được chọn bằng minimize_scalar trong khoảng 0,05–10 để "
+       "negative log-likelihood trên tập calibration nhỏ nhất. Xoài v3: T = 2,154 (mô hình gốc quá tự tin), ECE giảm 0,071 → 0,034. "
+       "Thanh long: T = 0,050 (chạm biên dưới vì tập calibration tách biệt hoàn toàn).",
+       "**Ngưỡng riêng từng lớp** (choose_class_thresholds): với các crop được đoán là một lớp, xếp theo độ tin cậy giảm dần, tìm "
+       "điểm thấp nhất mà nhóm phía trên vẫn đúng ≥ 80% (--target-precision 0.80) và có ít nhất max(5, 10%) mẫu; nếu không đạt thì "
+       "ngưỡng = 1,0. Ngưỡng được lưu đủ độ chính xác float64 vì lỗi làm tròn 0,9999997868 → 1,0 từng loại nhầm crop đúng."])
+
+    H(2, "4.3. Quy tắc gắn nhãn uncertain")
+    P("Code trong backend/two_stage.py: quả bị gắn uncertain nếu (1) crop có cạnh ngắn hơn 64 px — lý do crop_too_small, classifier "
+      "không chạy; hoặc (2) độ tin cậy sau hiệu chỉnh của lớp được đoán thấp hơn mức yêu cầu — lý do low_confidence, với")
+    R.code("mức yêu cầu = max(ngưỡng người dùng, ngưỡng riêng của lớp)\nuncertain   = độ tin cậy < mức yêu cầu")
+    R.table("Ngưỡng có hiệu lực của v3", ["Lớp", "Ngưỡng lớp", "Thanh trượt 0,55", "Thanh trượt 0,80"], [
+        ("mango_young", "0,46", "0,55", "0,80"), ("mango_mature", "0,44", "0,55", "0,80"),
+        ("mango_ripe", "0,54", "0,55", "0,80"), ("mango_turning", "0,82", "0,82", "0,82"),
+        ("dragonfruit (3 lớp)", "≈ 1,0", "≈ 1,0", "≈ 1,0"),
+    ], [5.0, 3.5, 4.0, 4.0])
+    P("Ngưỡng người dùng là tham số ripeness_threshold của /detect (API mặc định 0,80, chỉ cho chọn 0,50–0,99). Vì vậy ngưỡng 0,44 và "
+      "0,46 không bao giờ có hiệu lực một mình, và để thanh trượt 0,80 sẽ đè lên gần hết ngưỡng calibration. Ngày 03/10 nhóm hạ "
+      "mặc định của giao diện trên Cloud Run xuống 0,55 và đổi thẻ kết quả thành \"Model nghiêng về: Xoài non · tin cậy 72,4% "
+      "(cần ≥ 80%)\", vì người dùng đọc \"Độ chín 72,4%\" thành \"quả chín 72%\". Quả uncertain vẫn được đếm; JSON vẫn ghi lớp mô hình "
+      "nghiêng về (candidate_class) và mức yêu cầu (required_ripeness_confidence).")
+
+    H(2, "4.4. Tùy chọn ảnh tối, quét kỹ và đếm video")
+    B(["**low_light_assist:** CLAHE trên kênh L của không gian LAB (clip 2,0, ô 8×8), chỉ đưa ảnh đã tăng sáng cho detector; "
+       "classifier vẫn nhìn màu gốc để không làm sai độ chín.",
+       "**detailed_scan:** chạy detector ở ít nhất 1280 px, NMS IoU 0,5 và test-time augmentation, cho ảnh nhiều quả chồng nhau. "
+       "Chia ảnh thành ô 512 px đã thử ngày 02/10 nhưng tắt vì precision giảm 55,3% → 39,2%.",
+       "**Video (backend/video.py):** lấy khoảng 5 khung/giây, ByteTrack (conf = min(ngưỡng, 0,1), IoU 0,7), mỗi yêu cầu một tracker "
+       "riêng; một ID được đếm nếu xuất hiện ≥ 2 khung và có ≥ 1 box vượt ngưỡng; bộ lọc loài kiểm tra crop tốt nhất của mỗi ID; "
+       "video không phân loại độ chín."])
+
+    # ---------------- Chương 5
+    R.chapter_heading("CHƯƠNG 5. HUẤN LUYỆN VÀ CÁC LẦN CHẠY LẠI")
+    H(2, "5.1. Chuyển huấn luyện sang Vertex AI")
+    P("Một lần huấn luyện đầy đủ cần 7–14 giờ trên Colab T4 và không thể chạy không người trông. Tài khoản Google Cloud Free Trial "
+      "có quota GPU Compute Engine bằng 0, nhưng Vertex AI có quota Spot riêng. Ngân sách duy nhất là tín dụng Free Trial khoảng "
+      "5,78 triệu đồng (hết hạn 10/12). Bộ script scripts/gcp/ tải bộ dữ liệu đã chuẩn bị lên Cloud Storage một lần, gửi Vertex AI "
+      "custom job trên 1 × V100 Spot (n1-standard-8, giới hạn 24 giờ), ghi checkpoint mỗi epoch lên bucket để job bị thu hồi vẫn "
+      "chạy tiếp, và có script xem tiến độ. Spot V100 khoảng $0,75–1,00/giờ so với $2,48/giờ thường; một lần chạy 4–5 giờ tốn "
+      "khoảng $5–10. Lỗi nhỏ đã sửa: Vertex từ chối biến môi trường rỗng (commit 027ef31).")
+
+    H(2, "5.2. Thông số huấn luyện của mô hình v3")
+    R.table("Thông số từ args.yaml của job 4169118715503181824", ["", "Detector", "Classifier xoài", "Classifier thanh long"], [
+        ("Mô hình gốc", "yolov8s.pt (COCO)", "yolov8s-cls.pt (ImageNet)", "yolov8s-cls.pt"),
+        ("Lớp", "mango, dragonfruit", "young, mature, turning, ripe", "unripe, ripe, rotten"),
+        ("Dữ liệu train/val/calib/test", "9.231 / 1.972 / – / 2.037 ảnh", "2.688 / 351 / 235 / 234", "958 / 196 / 131 / 131"),
+        ("Ảnh • batch", "960 px • 8", "320 px • 32", "320 px • 32"),
+        ("Epoch tối đa • patience", "100 • 25", "50 • 15", "50 • 15"),
+        ("Optimizer", "AdamW, lr0 0,01, lrf 0,01, wd 0,0005, warmup 3", "như detector", "như detector"),
+        ("Seed • AMP", "42 (deterministic) • có", "42 • có", "42 • có"),
+        ("Tăng cường màu", "hsv_h 0, hsv_s 0,5, hsv_v 0,35", "hsv_h 0, hsv_s 0,35, hsv_v 0,25", "như xoài"),
+        ("Tăng cường hình học", "xoay 7°, dịch 0,1, scale 0,4, lật ngang 0,5, mosaic 0,5 (tắt 10 epoch cuối), erasing 0,4",
+         "xoay 10°, dịch 0,08, scale 0,25, lật ngang 0,5, erasing 0,1, auto_augment tắt", "như xoài"),
+        ("Loss", "box 7,5 · cls 0,5 · dfl 1,5", "cross-entropy", "cross-entropy"),
+        ("Thực tế", "100/100 epoch, tốt nhất epoch 86", "50/50 epoch (0,158 giờ), val top-1 86,0%", "dừng sớm epoch 22, tốt nhất epoch 7, val 100%"),
+    ], [3.4, 4.8, 4.3, 4.0], size=10.5)
+    P("Môi trường: 1 × V100 Spot, Ultralytics 8.4.155, torch 2.4.0; tổng thời gian job 3 giờ 54 phút.")
+
+    H(2, "5.3. v2 (28/09, job 4689768257580695552)")
+    P("Lần đầu trên Vertex AI, chạy 3 giờ 9 phút với bộ maturity_v2 và cùng cấu hình như Bảng 5.1. Detector đạt mAP50 98,5% "
+      "(mAP50-95 80,9%) trên test; thanh long 131/131. Nhưng xoài chỉ đúng **63,9%** (92/144 crop; premature 42,6%, early 69,7%, "
+      "mature 66,7%, ripe 92%). Kiểm tra ngày 29/09 tìm ra:")
+    B(["**Lỗi làm tròn ngưỡng:** 0,9999997868 thành 1,0 nên loại crop thanh long đúng; sửa bằng float64 và xử lý trường hợp bằng nhau "
+       "(test training/test_calibration_thresholds.py) → 128/131 lên 131/131 được nhận.",
+       "**Xoài gần như luôn uncertain:** premature và mature không đạt precision 80% ở ngưỡng nào nên ngưỡng = 1,0; chỉ 18/144 quả có nhãn.",
+       "**Ảnh chụp rộng:** cả trụ thanh long 3/~40 quả, cây xoài 8 quả; quét kích thước 640–1600 px không cải thiện → thiếu dữ liệu, không phải tham số.",
+       "**Nguyên nhân xoài:** bộ Mendeley \"Mango Growth Stages\" chia premature/early/mature theo **số ngày sau đậu quả**, không nhìn "
+       "thấy trên ảnh. Khi gộp về chín/chưa chín, mô hình đã đúng 97,9%."])
+
+    H(2, "5.4. v3 (29/09, job 4169118715503181824) – mô hình đang dùng")
+    P("v3 giữ nguyên cấu hình v2 và chỉ đổi dữ liệu, nên so sánh v2–v3 cho thấy đúng tác dụng của dữ liệu. Hai thay đổi: (1) lớp xoài "
+      "định nghĩa theo cái nhìn thấy — young (premature + early cũ), mature (mature cũ + ripening stage 0 và 1), turning (mới, "
+      "stage 2), ripe (ripe cũ + stage 3), dùng thêm 951 ảnh Mendeley mm8g66d7rc; (2) thêm 2.802 ảnh cả cây (far-field 1.023, "
+      "mango-tree 690, pitaya 992, ripe dragon plants 97). Bộ detector tăng lên 13.240 ảnh (+27%) và 36.861 box (+60%).")
+    R.table("Recall detector v2 → v3 trên cùng ảnh test (40 ảnh/nguồn) và các chỉ số khác",
+            ["Phép đo", "v2", "v3"], [
+        ("Cả cây xoài (rf_mango_tree)", "6,3%", "86,0%"),
+        ("Hàng thanh long (rf_pitaya_orchard)", "25,2%", "91,6%"),
+        ("Trụ thanh long (rf_ripe_dragon_plants)", "11,7%", "53,2%"),
+        ("Xoài chụp xa (mango_farfield)", "63%", "76,5%"),
+        ("Classifier xoài – accuracy", "63,9%", "90,2%"),
+        ("Xoài được trả nhãn chắc chắn", "18/144", "179/234 (174 đúng)"),
+        ("Ảnh thật: trụ thanh long / cây xoài", "3 / 8 quả", "22 / 46 quả"),
+    ], [8.0, 3.5, 5.0])
+    R.figure_row([V3_PHOTOS / "user_photo_2.jpg", V3_PHOTOS / "user_photo_3.jpg"], 6.5,
+                 "Kết quả v3 trên ảnh thật: trụ thanh long 22 quả (trái) và cây xoài 46 quả, nhiều quả nhỏ là uncertain (phải)")
+
+    H(2, "5.5. Kiểm tra v3 trên ảnh Internet (30/09)")
+    P("Nhóm thử 37 ảnh Wikimedia Commons (từ khóa \"thanh long\", \"xoài\", \"dragon fruit plant\", \"mango tree\") và xem bằng mắt. "
+      "Làm tốt: tìm thấy xoài ở 10/11 ảnh có xoài (31 quả trên một cây đông), xoài vàng chín đúng nhãn, thanh long trên trụ đúng, "
+      "gần như không báo nhầm lá, hoa, nhà. Lỗi mới: vải bị gọi là thanh long, hoa thanh long bị gọi là quả xanh, xoài đỏ và xoài "
+      "xanh cận cảnh hay uncertain. Trên ảnh âm tính, v3 tạo 214 box sai trên ảnh vải Việt Nam, 174 trên litchi, 73 trên táo, "
+      "27 trên chôm chôm, 22 trên lựu. Đây là lý do làm v4.")
+
+    H(2, "5.6. v4 (30/09, job 5533271247212773376): job thành công nhưng mô hình hỏng")
+    P("v4 chỉ huấn luyện lại detector và đổi nhiều thứ cùng lúc: 20.187 ảnh (thêm 5.534 ảnh thanh-long và 1.428 ảnh âm tính), "
+      "1280 px, fine-tune từ v3 trong 50 epoch với lr0 khởi đầu lại 0,01 (4,07 giờ). Lúc huấn luyện mAP50 validation đạt 93,3%, "
+      "nhưng tải lại best.pt chỉ còn **31,4%**, thanh long trên test 1,1%. Nguyên nhân: checkpoint lưu ở FP16 làm **27 phương sai "
+      "BatchNorm** ở đầu ra bão hòa tại 65.504 (giá trị lớn nhất của FP16); mọi giá trị vẫn hữu hạn nên kiểm tra NaN không phát hiện.")
+    P("Bản ước lượng lại BatchNorm vẫn mất xoài: ảnh cụm xoài nhỏ 11 → 0 quả, ảnh xoài đỏ 10 → 5. Kiểm tra dHash tìm thấy 76/830 "
+      "ảnh test có ảnh gần giống trong train, và bộ rf_ripe_dragon_plants bị chia lại tập sau khi khử trùng. Vì đổi quá nhiều thứ "
+      "cùng lúc, nhóm không biết thay đổi nào gây lỗi xoài. Sửa: lưu checkpoint FP32 (định dạng fruit-fp32-v1), kiểm tra dự đoán "
+      "trước/sau khi lưu giống hệt (commit d4b85a1); giữ v3. **Bài học: job chạy xong không có nghĩa mô hình dùng được.**")
+
+    H(2, "5.7. Chuẩn bị đánh giá công bằng (02/10)")
+    B(["**Checkpoint an toàn:** best.pt FP32, last.pt giữ optimizer và EMA; kiểm tra tensor hữu hạn, BatchNorm hợp lệ, dự đoán giống "
+       "hệt sau khi tải lại. Smoke test trên CPU: cố ý ngắt sau epoch 0, resume, chạy xong epoch 2.",
+       "**Benchmark cố định:** 234 ảnh validation, 584 quả, 112 ảnh không có quả; 960 px, conf 0,25, IoU 0,5; hash ảnh và nhãn được "
+       "kiểm tra mỗi lần. Cộng thêm các ảnh thật của nhóm làm ảnh hồi quy.",
+       "**Tiêu chí đặt trước:** mô hình mới chỉ thay v3 nếu lấy lại được các ảnh xoài bị mất.",
+       "44 test pass; frontend build và lint pass."])
+
+    H(2, "5.8. Thử nghiệm A / B / C (02/10)")
+    P("Cả ba fine-tune detector v3 trong 10 epoch, 960 px, batch 8, lr0 = 0,0001, seed 42, V100 Spot giới hạn 2 giờ; tập val/test giống "
+      "nhau từng byte. Chỉ dữ liệu train khác nhau.")
+    R.table("Thiết lập ba thử nghiệm", ["Thử", "Job • thời gian", "Dữ liệu khác nhau"], [
+        ("A", "5756784368953589760 • 33 phút", "Dữ liệu đã kiểm toán, có ảnh âm tính (13.551 ảnh train)"),
+        ("B", "2208933025004126208 • 32 phút", "Như A nhưng bỏ 273 ảnh táo/lựu/cà chua"),
+        ("C", "3521406860940804096 • ~26 phút", "50 nhãn sửa ×4, 11 ảnh xoài Wikimedia ×16, thanh-long ≤ 600 → tỉ lệ ảnh có xoài về 53,3%"),
+    ], [1.2, 5.3, 10.0])
+    P("Trước khi chạy C có một sự cố: khi kiểm tra cục bộ, Ultralytics gặp một JPEG bị cắt và tự \"sửa\" bằng cách ghi đè tệp; tệp "
+      "này được hard-link vào 5 bộ dữ liệu nên cả 5 thay đổi. Bước kiểm tra hash phát hiện, nhóm khôi phục bản gốc rồi mới gửi job.")
+    R.table("Kết quả trên benchmark cố định và ảnh hồi quy", ["Chỉ số / ảnh", "v3", "A", "B", "C"], [
+        ("Precision", "55,3%", "66,4%", "64,7%", "67,8%"),
+        ("Recall", "82,5%", "82,7%", "82,5%", "82,4%"),
+        ("Sai số đếm trung bình (quả/ảnh)", "1,83", "1,21", "1,30", "1,17"),
+        ("Box sai trên 112 ảnh âm tính", "290", "161", "177", "142"),
+        ("Cụm xoài chín nhỏ (số box)", "11", "4", "4", "4"),
+        ("Xoài đỏ trên cây", "10", "5", "5 + 2 sai loài", "7"),
+        ("Cả trụ thanh long", "22", "15", "13", "14"),
+        ("Cây xoài", "46", "38", "38", "41"),
+    ], [6.5, 2.5, 2.5, 2.5, 2.5])
+    P("Theo tiêu chí đặt trước, **không bản nào thay v3**. Quét ngưỡng confidence từ 0,05 đến 0,4 cho thấy recall nguồn xoài trên "
+      "cây không vượt khoảng 53% ở bất kỳ ngưỡng nào — mô hình không thấy các quả này, không phải do ngưỡng. Giả thuyết còn lại: "
+      "khoảng 560 ảnh âm tính vải, litchi, chôm chôm trông giống cụm xoài đỏ nhỏ; đây là giả thuyết cần kiểm chứng.")
+
+    # ---------------- Chương 6
+    R.chapter_heading("CHƯƠNG 6. CÀI ĐẶT HỆ THỐNG")
+    H(2, "6.1. Kiến trúc ứng dụng")
+    P("Frontend React + Ant Design (Vite) cho phép tải ảnh hoặc video, chỉnh thanh trượt ngưỡng phát hiện (0,25) và ngưỡng độ chín, "
+      "bật hai công tắc \"Hỗ trợ ảnh thiếu sáng\" và \"Quét kỹ ảnh nhiều quả\". Backend FastAPI kiểm tra định dạng, kích thước, xoay "
+      "ảnh theo EXIF, rồi gọi pipeline chạy bằng Ultralytics 8.4.155 trên PyTorch CPU; video dùng ByteTrack (thư viện lap). Khi build "
+      "frontend, FastAPI phục vụ luôn giao diện tại \"/\".")
+    R.table("Các endpoint của API", ["Endpoint", "Tham số chính → kết quả"], [
+        ("GET /health", "pipeline_mode (two-stage / legacy), model_loaded, detector_imgsz, other_fruit_filter, model_classes"),
+        ("POST /detect", "ảnh ≤ 12 MB; conf_threshold 0,25; ripeness_threshold 0,80; low_light_assist; detailed_scan → total_count, "
+                         "counts, detections[] (bbox, species, class_name, ripeness_confidence, uncertain, uncertainty_reason, "
+                         "candidate_class, required_ripeness_confidence, other_fruit_probability), ảnh JPEG base64"),
+        ("POST /detect-video", "mp4/m4v/mov/webm/avi ≤ 50 MB, ≤ 30 giây, ≤ 1080p → total_unique_count, counts, khung hình minh họa"),
+        ("GET /docs", "Swagger UI tự sinh từ FastAPI"),
+    ], [3.5, 13.0], size=11)
+
+    H(2, "6.2. Các dịch vụ cloud")
+    R.table("Dịch vụ Google Cloud và các nền tảng khác", ["Dịch vụ", "Dùng để", "Chi tiết"], [
+        ("Cloud Run", "Host ứng dụng", "Service fruit-detection, asia-southeast1; 1 CPU, 2 GiB, timeout 120 s, concurrency 1, tối đa 1 instance, tự tắt; "
+                                       "fruit-detection-542444439835.asia-southeast1.run.app"),
+        ("Cloud Build", "Build Docker image khi deploy", "gcloud run deploy --source; cấp role Cloud Run Builder cho service account"),
+        ("Artifact Registry", "Lưu image", "Nơi deploy --source mặc định đẩy image (suy ra từ cách deploy)"),
+        ("Vertex AI custom job", "Huấn luyện", "us-central1, 1 × V100 Spot, n1-standard-8; job v2, v3, v4, A, B, C"),
+        ("Cloud Storage", "Dữ liệu và checkpoint", "Bucket project-1c166153-8e72-4d82-9e0-fruit-training"),
+        ("Colab + Google Drive", "Huấn luyện vòng 0–2", "Không còn dùng"),
+        ("Modal", "Thử host", "Thất bại vì giới hạn chi tiêu $0; modal_app.py vẫn còn trong repo"),
+        ("Cloudflare quick tunnel", "Host tạm từ laptop", "Chỉ chạy khi laptop bật"),
+    ], [3.6, 3.9, 9.0], size=11)
+
+    H(2, "6.3. Lịch sử triển khai Cloud Run")
+    R.table("Các revision đã triển khai", ["Ngày", "Revision / tag", "Nội dung và lý do"], [
+        ("24/09", "00001-z2h", "Mô hình 7 lớp; ~7,6 giây/ảnh; giữ để rollback"),
+        ("03/10", "00003-hat • v3-mobile", "v3 + giao diện điện thoại. Sửa Dockerfile thiếu module, thêm .gcloudignore để không mất weight; "
+                                            "deploy_cloud_run.sh tạo revision chưa nhận traffic → smoke test → PROMOTE=1"),
+        ("03/10", "00005-yap • v3-ui-fix", "Thẻ độ chín mới; ngưỡng mặc định giao diện 0,55"),
+        ("06–08/10", "fix4", "v3 + bộ lọc loài + video + ảnh tối + quét kỹ"),
+    ], [2.2, 4.3, 10.0], size=11)
+    P("Kiểm tra image trong giới hạn của Cloud Run (1 CPU, 2 GiB): sẵn sàng sau khoảng 3 giây, RAM tối đa 572 MiB, 1,4–2,1 giây mỗi ảnh "
+      "(trụ thanh long 22 quả trong 1,8 giây, cây xoài 46 quả trong 1,4 giây); yêu cầu đầu tiên sau khi dịch vụ tự tắt sẽ chậm hơn. "
+      "Lưu ý vận hành: .dockerignore của bản chính chưa cho phép tệp species_verifier.pt, nên build mới sẽ mất bộ lọc nếu không thêm dòng này.")
+
+    H(2, "6.4. Tính năng thêm 05–06/10")
+    P("Mỗi tính năng xuất phát từ một ảnh lỗi cụ thể. Ảnh mận trên tay bị v3 gọi là \"thanh long chín 100%\"; nhóm huấn luyện nhanh bộ "
+      "lọc loài YOLOv8n-cls 3 lớp trên CPU laptop (5 epoch, 224 px, lớp \"other\" lấy ảnh mận Wikimedia), bật lên thì hai box sai biến "
+      "mất. Với ảnh tối tổng hợp (gamma 2,2, phơi sáng 35%), ảnh thường tìm 13 quả, làm tối còn 2, bật hỗ trợ lên 6. Quét kỹ trên ảnh "
+      "5 xoài chồng nhau tăng từ 2 lên 4 quả. Dữ liệu huấn luyện bộ lọc nằm trong thư mục tạm và đã mất — đây là nguồn gốc của lỗi ở Mục 7.4.")
+    R.figure_row([CASES / "filter_plum_off.jpg", CASES / "filter_plum_on.jpg"], 5.0,
+                 "Ảnh mận: tắt bộ lọc có 2 box sai (trái), bật bộ lọc còn 0 box (phải)")
+    R.figure_row([CASES / "low_0_normal.jpg", CASES / "low_0_dark.jpg", CASES / "low_0_assist.jpg"], 4.5,
+                 "Ảnh thường 13 quả, làm tối 2 quả, làm tối + hỗ trợ ảnh tối 6 quả")
+
+    H(2, "6.5. Kiểm thử")
+    B(["Dữ liệu: 22 test (28/09) → 44 test (02/10 sáng) → 56 test (02/10 tối, gồm bảo vệ import/review) → 63 test khi tạo recovery C.",
+       "Checkpoint: test FP16 guard, safe checkpoints, smoke test CPU có ngắt và resume.",
+       "Ứng dụng: /health và tải bốn ảnh thật trả HTTP 200 với số lượng nhất quán; giao diện điện thoại kiểm tra bằng Chromium headless "
+       "ở 320–1280 px (chưa thử trên điện thoại thật); video thử ở Mục 7.5."])
+
+    # ---------------- Chương 7
+    R.chapter_heading("CHƯƠNG 7. KẾT QUẢ VÀ PHÂN TÍCH LỖI")
+    H(2, "7.1. Detector v3")
+    R.table("Detector v3 trên tập test (2.037 ảnh, 7.468 box)", ["Tập", "Precision", "Recall", "mAP50", "mAP50-95"], [
+        ("Val, epoch 86", "92,8%", "89,8%", "95,2%", "69,0%"),
+        ("Test – tất cả", "92,2%", "88,3%", "94,9%", "68,3%"),
+        ("Test – xoài", "92,6%", "86,6%", "94,2%", "66,4%"),
+        ("Test – thanh long", "91,8%", "90,0%", "95,6%", "70,1%"),
+    ], [5.0, 2.9, 2.9, 2.9, 2.9], highlight={2})
+    P("mAP thấp hơn v2 vì tập test v3 có thêm ảnh cả cây khó hơn, không phải mô hình kém đi.")
+
+    H(2, "7.2. Classifier và độ tin cậy")
+    R.table("Classifier v3 trên tập test", ["", "Xoài (234 crop)", "Thanh long (131 crop)"], [
+        ("Accuracy", "90,2% (211/234)", "100% (131/131)"),
+        ("Recall theo lớp", "turning 24/24 · ripe 47/49 · mature 76/87 · young 64/74", "ripe 46/46 · rotten 27/27 · unripe 58/58"),
+        ("Nhầm lẫn chính", "mature → young 11; young → mature 8; ripe ↔ young 2 + 2", "không có"),
+        ("Được trả nhãn", "179/234 (76%), trong đó 174 đúng (97,2%)", "131/131"),
+        ("Theo nguồn", "Mendeley ripening 96/96 · Roboflow 115/138", "Roboflow 104/104 · Black_Rot 27/27"),
+        ("Hiệu chỉnh (calib)", "T = 2,154; ECE 0,071 → 0,034; accuracy 87,7%", "T = 0,050; ECE 0,004 → 0; accuracy 100%"),
+    ], [3.4, 7.0, 6.1], size=11)
+    P("Với xoài, hiệu chỉnh có tác dụng thật. Mô hình đoán sai 23/234 crop; ngưỡng uncertain giữ lại 18 trong 23 lỗi đó (78%), chỉ 5 "
+      "lỗi lọt ra thành nhãn sai; đổi lại 37 crop đúng cũng bị gắn uncertain. Lỗi dồn vào hai lớp xanh young và mature — đúng chỗ khó "
+      "nhìn bằng mắt. Với thanh long, độ tin cậy luôn ≈ 1,0 nên không phân biệt được ca dễ hay khó (Mục 7.6). Nhóm chưa kiểm tra con số "
+      "179/234 được đo với ngưỡng lớp hay với max(0,80; ngưỡng lớp); nên chạy lại ở cả hai mức nếu cần báo cáo chính xác.")
+
+    H(2, "7.3. Đánh giá lại pipeline đang chạy (08/10)")
+    P("Nhóm chạy lại toàn bộ pipeline đã triển khai trên 2.037 ảnh test, 400 ảnh không có quả và 200 ảnh làm tối, so sánh bật/tắt bộ lọc loài "
+      "(tệp eval/summary.json của thư mục trình bày).")
+    R.table("Kết quả đánh giá ngày 08/10", ["Phép đo", "Lọc tắt", "Lọc bật"], [
+        ("Recall tổng (7.768 quả)", "88,8%", "88,5%"),
+        ("Precision tổng", "84,1%", "84,1%"),
+        ("Box sai trên 400 ảnh không có quả", "1.103", "264"),
+        ("Ảnh âm tính còn box sai", "276/400", "114/400"),
+        ("Ảnh vải còn box sai", "—", "28/40"),
+        ("Recall ảnh thường / tối / tối + hỗ trợ", "86,4% / 54,0% / 62,9%", ""),
+        ("Recall theo nguồn yếu nhất", "xoài trên cây 56,4%; trụ thanh long 53,2%", ""),
+        ("Nhãn độ chín", "2.493 chắc chắn / 5.673 uncertain (~3/4 do crop < 64 px)", ""),
+    ], [7.0, 5.5, 4.0], size=11)
+    R.table("Recall theo nguồn (lọc tắt)", ["Nguồn", "Recall", "Nguồn", "Recall"], [
+        ("dragon_fruit_orchard", "99,7%", "rf_pitaya_orchard", "90,7%"),
+        ("rf_dragonfruit_curated", "100%", "mango_orchard_daylight", "90,1%"),
+        ("mango_yolo", "97,9%", "rf_mango_tree", "86,9%"),
+        ("rf_mango", "96,5%", "mango_farfield", "78,3%"),
+        ("mango_on_tree", "56,4%", "rf_ripe_dragon_plants", "53,2%"),
+    ], [4.8, 3.4, 4.8, 3.4], size=11)
+
+    H(2, "7.4. Lỗi bộ lọc loài xóa nhầm xoài chín")
+    P("Khi đếm theo mức chín, bộ lọc loài xóa **24/49 xoài chín** và **8/24 xoài turning** trong tập test, dù detector vẫn chấm các quả "
+      "này 0,70–0,87. Bộ lọc được huấn luyện nhanh với ảnh mận và học rằng vỏ vàng cam có đốm là \"quả khác\". Số tổng không phát hiện "
+      "lỗi vì tập test detector chủ yếu là xoài xanh, nên recall tổng chỉ giảm 0,3 điểm. Cách sửa: huấn luyện lại bộ lọc với crop xoài "
+      "chín và xoài có đốm trong lớp mango, rồi kiểm tra tỉ lệ bị loại theo từng mức chín trước khi deploy; trong lúc chờ, tắt bộ lọc "
+      "khi cần đánh giá độ chín (SPECIES_VERIFIER_PATH trỏ tới tệp không tồn tại).")
+    R.figure_row([CASES / "filter_spotted_off.jpg", CASES / "filter_spotted_on.jpg"], 7.0,
+                 "Xoài chín có đốm: tắt bộ lọc nhận \"mango ripe 89%\" (trái), bật bộ lọc mất hết (phải)")
+
+    H(2, "7.5. Đếm quả trong video")
+    P("Video vườn thanh long 20 giây (100 khung) đếm được 3 quả. Video giả lập lia máy qua cây xoài 12 giây (60 khung) đếm 12 trong khi "
+      "thực tế 8 — một chiếc lá bị nhận là xoài, và quả bị che rồi xuất hiện lại được gán ID mới. Số đếm video là ước lượng; chưa có "
+      "video vườn thật có số quả chuẩn để đo sai số.")
+
+    H(2, "7.6. Vì sao các con số cao và con số nào nên tin")
+    P("Một phần con số cao là thật: detector chỉ còn 2 lớp khác nhau rõ, và độ chín có tín hiệu màu mạnh (turning 24/24, ripe 47/49); "
+      "chỉ đổi định nghĩa lớp xoài đã nâng accuracy từ 63,9% lên 90,2%. Phần còn lại đến từ cách đo:")
+    B(["Test cùng nguồn, cùng camera, cùng kiểu nền với train — kiểm tra trong phân phối quen thuộc.",
+       "Crop classifier đã chọn lọc (quả nổi bật, ≥ 64 px); ca mơ hồ bị cách ly.",
+       "Có nguồn rất dễ: Mendeley ripening là xoài trên bàn trắng (96/96), trong khi Roboflow chỉ 115/138 (83%).",
+       "mAP50 dễ tính (IoU ≥ 0,5); ở mức chặt mAP50-95 chỉ 68,3%.",
+       "Có thể còn rò rỉ: 76/830 ảnh test v4 có ảnh gần giống trong train."])
+    P("**Classifier thanh long có overfitting không?** Không theo nghĩa thông thường: trong results.csv, train loss và val loss cùng giảm "
+      "(val loss 0,007 ở epoch 7, 0,0004 ở epoch 22), không có lúc val loss tăng, và test riêng cũng 131/131. Vấn đề là tập đánh giá "
+      "quá dễ và mô hình có thể học tắt: toàn bộ lớp rotten đến từ một bộ (Black_Rot), ripe/unripe từ bộ khác, nên mô hình có thể "
+      "phân biệt theo \"kiểu ảnh\" thay vì vết thối; đạt 100% từ epoch 7 và T chạm biên 0,05. Ở thử nghiệm B, hai quả xoài đỏ bị chuyển "
+      "nhầm sang nhánh thanh long và vẫn được gọi là \"chín\" với độ tin cậy rất cao. Cách kiểm chứng: gán nhãn vài chục crop thanh "
+      "long cắt từ ảnh vườn, hoặc thêm ảnh quả thối từ nguồn khác, rồi đo lại.")
+    R.table("So sánh phép đo dễ và khó", ["Phép đo", "Kết quả"], [
+        ("Detector, tập test chính", "mAP50 94,9%, recall 88,3%"),
+        ("Benchmark 234 ảnh có ảnh âm tính", "precision 55,3%, 290 box sai trên 112 ảnh"),
+        ("Xoài dày trên cây / trụ thanh long", "recall 56% / 53%"),
+        ("Ảnh tối", "recall 54% (63% khi bật hỗ trợ)"),
+        ("Cả pipeline trên ảnh nguyên", "~30% quả có nhãn độ chín chắc chắn"),
+    ], [8.0, 8.5])
+
+    # ---------------- Chương 8
+    R.chapter_heading("CHƯƠNG 8. KẾT LUẬN, BÀI HỌC VÀ HƯỚNG PHÁT TRIỂN")
+    H(2, "8.1. Kết quả đạt được")
+    B(["Pipeline hai giai đoạn có hiệu chỉnh xác suất và nhãn uncertain; mô hình v3 đạt mAP50 94,9% và accuracy độ chín xoài 90,2% trên tập test cùng nguồn.",
+       "Quy trình dữ liệu chống rò rỉ, khử trùng, rà nhãn được viết thành code và có test.",
+       "Hạ tầng huấn luyện trên Vertex AI có checkpoint an toàn và benchmark cố định.",
+       "Ứng dụng web/API chạy trên Cloud Run, có đếm video, hỗ trợ ảnh tối, quét kỹ và lọc quả khác."])
+    H(2, "8.2. Năm bài học")
+    B(["**Sửa dữ liệu trước khi train lại:** ba vòng thất bại vì dữ liệu (polygon, nhãn theo tuổi quả, thiếu ảnh cả cây); thêm epoch không sửa được.",
+       "**Kiểm tra trên đúng loại ảnh sẽ dùng:** 91% và 98,5% che giấu thất bại trên ảnh cả cây vì test giống train.",
+       "**Confidence thô không phải xác suất:** hiệu chỉnh và nhãn uncertain cho câu trả lời trung thực.",
+       "**Nhãn phải nhìn thấy được:** chỉ đổi định nghĩa lớp xoài, accuracy từ 63,9% lên 90,2%.",
+       "**Bảo vệ và kiểm tra checkpoint, xem kết quả theo nhóm:** v4 cho thấy job xong chưa chắc mô hình dùng được; A/B/C và bộ lọc "
+       "loài đều đẹp trên số tổng nhưng làm mất xoài chín."])
+    H(2, "8.3. Hạn chế")
+    B(["Bộ lọc loài xóa 24/49 xoài chín; xoài dày trên cây và trụ thanh long dày quả chỉ ~53–56% recall; vải/litchi vẫn bị nhận nhầm.",
+       "Ảnh tối 54% (63% khi hỗ trợ); video mới là ước lượng.",
+       "Classifier thanh long 100% chưa kiểm chứng ngoài tập tuyển chọn.",
+       "MangoFruitBD phi thương mại; giấy phép mm8g66d7rc chưa ghi.",
+       "Chưa có ảnh/video có nhãn từ vườn mục tiêu."])
+    H(2, "8.4. Hướng phát triển (theo chi phí)")
+    B(["Huấn luyện lại bộ lọc loài với xoài chín/đốm và kiểm tra tỉ lệ loại theo từng mức chín.",
+       "Thử giới hạn phóng to cho ảnh nhỏ trên benchmark (chỉ cần đánh giá, không cần train).",
+       "Nếu train tiếp, mỗi lần chỉ đổi một yếu tố (ví dụ C bỏ ảnh vải/chôm chôm).",
+       "Sửa nhãn 1.246 frame thanh long đang bị cách ly.",
+       "Thu ảnh và video có nhãn từ đúng vườn, đúng camera; giữ một tập test chưa đụng tới cho mô hình được chọn."])
+
+    # ---------------- References
+    R.chapter_heading("TÀI LIỆU THAM KHẢO")
+    refs = [
+        "G. Jocher, A. Chaurasia, J. Qiu. Ultralytics YOLOv8, 2023. https://github.com/ultralytics/ultralytics",
+        "C. Guo, G. Pleiss, Y. Sun, K. Q. Weinberger. On Calibration of Modern Neural Networks. ICML, 2017.",
+        "Y. Zhang et al. ByteTrack: Multi-Object Tracking by Associating Every Detection Box. ECCV, 2022.",
+        "A. Koirala, K. B. Walsh, Z. Wang, C. McCarthy. Deep learning for real-time fruit detection and orchard fruit load estimation: "
+        "benchmarking of 'MangoYOLO'. Precision Agriculture 20, 2019.",
+        "K. Zuiderveld. Contrast Limited Adaptive Histogram Equalization. Graphics Gems IV, 1994.",
+        "N. Krawetz. Kind of Like That (dHash). The Hacker Factor Blog, 2013.",
+        "MangoYOLO data set, CQUniversity: https://acquire.cqu.edu.au/articles/dataset/MangoYOLO_data_set/13450661",
+        "Mendeley Data: 2jpzbx8tm6 (Dragon fruit maturity/quality), t8kbmg6cgz (DF pose v2), bhrz29mkmr (MangoFruitBD v2), "
+        "kpsywfwkrf (DF-MOD), gcgrjvwmm2 (on-tree mango), mm8g66d7rc (mango ripening). https://data.mendeley.com/datasets/<mã>",
+        "Roboflow Universe: jerng-mi/mango-tree-rya7c, pitaya-2jhyv/goodgoodgood, training-dwctq/ripe-dragon-fruits, "
+        "thanh-long-v1/thanh-long-detection-znzlc. https://universe.roboflow.com",
     ]
-    for i,(n,t,b) in enumerate(items):
-        y = 1.55 + i*1.2
-        add_box(s, .7, y, 11.95, 1.04, WHITE)
-        add_text(s, n, .96, y+.12, .65, .72, 25, GREEN, True)
-        add_text(s, t, 1.8, y+.13, 2.45, .65, 20, NAVY, True)
-        add_text(s, b, 4.26, y+.13, 8.1, .69, 17, INK)
+    for i, ref in enumerate(refs, 1):
+        para = R.d.add_paragraph()
+        para.paragraph_format.left_indent = Cm(0.8)
+        para.paragraph_format.first_line_indent = Cm(-0.8)
+        add_runs(para, f"[{i}]  {ref}", size=12)
+    H(2, "Tệp minh chứng trong dự án")
+    R.table("Nơi kiểm tra số liệu", ["Minh chứng", "Đường dẫn"], [
+        ("Lịch sử dự án", ".claude/worktrees/gcp-vertex-training/docs/PROJECT_HISTORY.md"),
+        ("Job Vertex (args, results, review)", "fruit_detection_runs_gcp_review/<mã job>/"),
+        ("Benchmark + A/B/C", "fruit_detection_runs_gcp_review/regression_20261002/trial_abc_summary.json"),
+        ("Rà nhãn 02/10", "fruit_detection_runs_gcp_review/label_audit_20261002/"),
+        ("Dữ liệu (phiên bản, nguồn)", "data/prepared/*/preparation_report.json; data/external/datasets.json"),
+        ("Đánh giá 08/10", "fruit_detection_presentation/eval/summary.json"),
+    ], [5.0, 11.5], size=11)
 
-    s = new_slide(prs, "Các mốc phát triển của dự án", "03 • quá trình")
-    detail_rows(s,[
-        ("09/12","Khởi tạo","Định nghĩa bài toán, tổ chức backend, frontend và dữ liệu."),
-        ("09/18","Baseline","Notebook Colab và checkpoint YOLOv8s 7 lớp; thử ảnh mẫu."),
-        ("09/24","Tách hai bước","Detector theo loài + hai classifier độ chín và hiệu chỉnh."),
-        ("09/28","Dữ liệu v3","Bổ sung ảnh vườn, kiểm toán nhãn và huấn luyện trên cloud."),
-        ("10/02","Phân tích lỗi","Benchmark ảnh âm tính, sửa nhãn và thử detector mới."),
-    ],row_h=.89,gap=.08)
+    # ---------------- Appendices
+    R.chapter = "A"
+    R.chapter_heading("PHỤ LỤC A. LỜI THUYẾT TRÌNH THEO TỪNG SLIDE")
+    P("Nội dung dưới đây chép từ Speaker Notes của tệp Smart_Orchard_AI_Thuyet_trinh_nhom.pptx (do reports/build_presentation.py tạo), "
+      "để người trình bày có thể in ra và luyện tập.")
+    for i, (title, note) in enumerate(slide_notes(), 1):
+        H(3, f"Slide {i:02d}. {title}")
+        for chunk in [c.strip() for c in note.split("\n\n") if c.strip()]:
+            P(" ".join(chunk.split()), indent=False, size=12)
 
-    s = new_slide(prs, "Vì sao nhóm đổi cách tiếp cận?", "04 • quyết định kỹ thuật")
-    card(s,.68,1.55,3.82,4.87,"Bản ban đầu",
-         "YOLOv8s dự đoán trực tiếp 7 lớp loài + độ chín.\n\nMột box phải giải quyết đồng thời vị trí và màu/giai đoạn chín.",GREEN,16)
-    card(s,4.76,1.55,3.82,4.87,"Bản hai giai đoạn",
-         "Detector chỉ tìm xoài/thanh long.\n\nCrop từng quả cho classifier riêng; xác suất được hiệu chỉnh.",GOLD,16)
-    card(s,8.84,1.55,3.82,4.87,"Bài học từ thử nghiệm",
-         "Ảnh quả khác gây false positive; quả nhỏ và xoài nhiều giai đoạn vẫn khó.\n\nNhóm thêm verifier và nhãn chưa chắc chắn.",RED,16)
+    R.chapter = "B"
+    R.chapter_heading("PHỤ LỤC B. CÁCH CHẠY VÀ KỊCH BẢN DEMO")
+    H(2, "B.1. Chạy tại máy")
+    R.code("python3 -m venv .venv && source .venv/bin/activate\npip install -r backend/requirements.txt\n"
+           "uvicorn backend.app:app --host 127.0.0.1 --port 8000\n# terminal thứ hai\ncd frontend && npm ci && npm run dev   # http://localhost:5173")
+    P("Biến môi trường: PIPELINE_MODE (auto / two-stage / legacy), DETECTOR_IMGSZ (960), OTHER_FRUIT_THRESHOLD (0,90), "
+      "SPECIES_VERIFIER_PATH (trỏ tới tệp không tồn tại để tắt bộ lọc). Weight v3 và tệp calibration phải có trong backend/weights. "
+      "Gọi API trực tiếp:", indent=False)
+    R.code('curl -F "file=@anh.jpg" "http://localhost:8000/detect?conf_threshold=0.25&detailed_scan=true"')
+    H(2, "B.2. Kịch bản demo (~6 phút)")
+    R.table("Các bước demo", ["#", "Thao tác", "Tệp / cài đặt", "Điều cần chỉ ra"], [
+        ("1", "Mở /health", "…/health", "pipeline_mode = two-stage, other_fruit_filter"),
+        ("2", "Thanh long cận cảnh", "dragon-fruit-pucka-fertilizer-1.jpg", "3 box, nhãn chín + độ tin cậy"),
+        ("3", "Cả trụ thanh long", "tru-cay-thanh-long.jpg", "~22 quả; quả nhỏ → uncertain"),
+        ("4", "Cây xoài nhiều quả", "oxi-house-cay-xoai-tu-quy-2_…jpg", "~46 box; thẻ \"Model nghiêng về …\""),
+        ("5", "Quả khác", "images (9).jpeg (mận)", "Lọc tắt có box sai → bật còn 0"),
+        ("6", "Xoài chồng nhau", "images (7).jpeg + \"Quét kỹ\"", "2 → 4 trên 5 quả"),
+        ("7", "Video", "orchard_dragon_input.mp4 (20 s)", "Số quả duy nhất, khung minh họa"),
+        ("8", "Lỗi đã biết", "Xoài chín có đốm, lọc bật/tắt", "Bộ lọc xóa xoài chín → bài học"),
+    ], [0.8, 3.6, 6.0, 6.1], size=11)
+    P("Chuẩn bị: mở trang Cloud Run trước 1–2 phút (dịch vụ tự tắt khi không dùng). Nếu mạng hoặc máy lỗi, dùng ảnh kết quả có sẵn "
+      "trong báo cáo và video đã gán nhãn *_annotated.mp4. Rollback Cloud Run: gcloud run services update-traffic fruit-detection "
+      "--region=asia-southeast1 --to-revisions=<revision>=100.", indent=False)
 
-    s = new_slide(prs, "Luồng xử lý hai giai đoạn", "03 • kiến trúc")
-    stages = [
-        ("Ảnh đầu vào", "Ảnh vườn"),
-        ("YOLOv8s", "Tìm xoài / thanh long"),
-        ("Cắt vùng quả", "Kiểm tra quả khác"),
-        ("Classifier", "Độ chín theo từng loài"),
-        ("Kết quả", "Box • nhãn • số lượng"),
-    ]
-    for i,(a,b) in enumerate(stages):
-        x=.65+i*2.53
-        add_box(s,x,2.05,2.13,2.8,WHITE)
-        add_box(s,x,2.05,2.13,.14,GREEN,radius=False)
-        add_text(s,a,x+.12,2.48,1.9,.52,19,NAVY,True,PP_ALIGN.CENTER)
-        add_text(s,b,x+.13,3.15,1.87,1.05,15,INK,align=PP_ALIGN.CENTER)
-        if i<4: add_text(s,"→",x+2.15,3.06,.35,.55,26,GREEN,True,PP_ALIGN.CENTER)
-    add_box(s,.65,5.36,12.0,.79,MINT)
-    add_text(s,"Điểm thiết kế: ngưỡng độ chín đã hiệu chỉnh; dự đoán yếu được gắn nhãn “chưa chắc chắn”.",
-             .9,5.54,11.5,.43,17,NAVY)
+    R.chapter = "C"
+    R.chapter_heading("PHỤ LỤC C. CÁC TỆP MÃ NGUỒN XỬ LÝ DỮ LIỆU")
+    P("Bản dùng để tạo dữ liệu v3 trở đi nằm trong worktree gcp-vertex-training (đã merge lên origin/main); bản checkout chính dừng ở maturity_v2.")
+    R.table("Tệp Python xử lý dữ liệu", ["Tệp", "Chức năng"], [
+        ("scripts/download_orchard_datasets.py", "Tải DF pose v2 và MangoFruitBD; kiểm tra CRC/SHA256, chuẩn hóa box"),
+        ("scripts/download_dragon_black_rot.py", "Tải Black_Rot của DF-MOD; kiểm tra đủ 675 tệp theo hash"),
+        ("scripts/download_roboflow_detection.py", "Tải các bộ Roboflow ảnh cả cây"),
+        ("scripts/download_negatives.py", "Tải ảnh âm tính (quả khác, hoa thanh long)"),
+        ("scripts/audit_public_datasets.py", "Kiểm kê các bộ đã tải"),
+        ("training/prepare_two_stage_data.py", "Gộp nguồn, polygon → box, ánh xạ nhãn, chia tập theo nhóm, cắt crop, chống rò rỉ"),
+        ("training/maturity_data.py", "Rà nhãn thanh long, dHash, cổng sẵn sàng 80/20"),
+        ("training/detector_splits.py", "Chia tập detector ổn định, gom bản sao"),
+        ("training/prepare_detector_trial.py", "Tạo dữ liệu thử nghiệm A/B"),
+        ("training/audit_detector_labels.py", "Kiểm tra nhãn tự động và vẽ trang rà"),
+        ("training/apply_detector_label_review.py", "Áp quyết định rà vào bộ dữ liệu mới"),
+        ("training/prepare_detector_recovery.py", "Tạo bộ recovery C"),
+        ("training/evaluate_detector_regression.py", "Benchmark cố định 234 ảnh"),
+        ("training/evaluate_orchard_pipeline.py", "Đánh giá cả pipeline với ngưỡng của app"),
+    ], [6.8, 9.7], size=11)
 
-    s = new_slide(prs, "Dữ liệu và kiểm soát chất lượng", "04 • phương pháp")
-    card(s,.68,1.55,5.8,4.85,"Nguồn dữ liệu",
-         "Ảnh xoài và thanh long từ Roboflow và các bộ dữ liệu vườn công khai.\n\nNhãn được ánh xạ theo tên; dữ liệu phát hiện và dữ liệu độ chín được tách đúng vai trò.",GREEN,17)
-    card(s,6.76,1.55,5.8,4.85,"Quy tắc xử lý",
-         "Loại ảnh trùng; gom biến thể cùng ảnh gốc vào một tập; kiểm tra box/crop và nhãn mâu thuẫn.\n\nTắt xoay hue khi tăng cường dữ liệu vì màu là tín hiệu quan trọng của độ chín.",GOLD,17)
-
-    s = new_slide(prs, "Quy mô dữ liệu của lần huấn luyện v3", "07 • dữ liệu")
-    add_text(s,"Số ảnh theo split; detector và hai classifier có tập dữ liệu riêng",.72,1.44,11.7,.38,16,MUTED)
-    columns=[("Thành phần","Train","Val","Calib","Test"),
-             ("Detector","9.231","1.972","—","2.037"),
-             ("Classifier xoài","2.688","351","235","234"),
-             ("Classifier thanh long","958","196","131","131")]
-    for i,row in enumerate(columns):
-        y=2.02+i*.84
-        add_box(s,.73,y,11.86,.72,NAVY if i==0 else WHITE)
-        xs=[.9,5.85,7.47,9.08,10.65]; ws=[4.67,1.36,1.35,1.35,1.55]
-        for j,v in enumerate(row):add_text(s,v,xs[j],y+.08,ws[j],.55,17,WHITE if i==0 else INK,i==0)
-    add_box(s,.73,5.72,11.86,.77,MINT)
-    add_text(s,"Nguồn: data/prepared/two_stage_maturity_v3/preparation_report.json",.94,5.88,11.4,.43,15,NAVY)
-
-    s = new_slide(prs, "Nhóm đã xử lý những lỗi dữ liệu nào?", "08 • làm sạch")
-    card(s,.68,1.56,3.82,4.83,"Nhãn chưa đáng tin",
-         "Phát hiện 145 trường hợp nhãn độ chín mâu thuẫn với nguồn và 703 box nhỏ hơn 1% diện tích ảnh.\n\nQuả mơ hồ được loại khỏi classifier.",GREEN,15)
-    card(s,4.76,1.56,3.82,4.83,"Ảnh trùng / rò rỉ",
-         "675 file Black_Rot chỉ có 270 ảnh khác nhau: loại 405 bản trùng.\n\nCác biến thể từ cùng ảnh gốc được giữ cùng split.",GOLD,15)
-    card(s,8.84,1.56,3.82,4.83,"Sai ý nghĩa nhãn",
-         "Không suy diễn Fresh/Defect thành ripe/rotten.\n\nNhãn chỉ dùng cho đúng nhiệm vụ: phát hiện loài hoặc phân loại độ chín.",RED,15)
-
-    s = new_slide(prs, "Các lớp đầu ra hiện tại", "05 • mô hình")
-    card(s,.67,1.55,5.82,4.9,"Xoài · 4 mức",
-         "mango_young — non\nmango_mature — trưởng thành\nmango_turning — chuyển chín\nmango_ripe — chín\n\n+ mango_uncertain khi chưa đủ tin cậy",GREEN,17)
-    card(s,6.76,1.55,5.82,4.9,"Thanh long · 3 mức",
-         "dragonfruit_unripe — chưa chín\ndragonfruit_ripe — chín\ndragonfruit_rotten — hỏng\n\n+ dragonfruit_uncertain khi chưa đủ tin cậy",GOLD,17)
-
-    s = new_slide(prs, "Huấn luyện và đánh giá", "06 • thực nghiệm")
-    for i,(h,b) in enumerate([
-        ("Chuẩn bị", "Dữ liệu được kiểm tra nhãn, ảnh trùng và rò rỉ giữa các tập."),
-        ("Huấn luyện", "Detector YOLOv8s, classifier xoài và classifier thanh long riêng."),
-        ("Hiệu chỉnh", "Temperature scaling và ngưỡng theo lớp cho độ chín."),
-        ("Đo lường", "Precision/recall cho box; accuracy cho crop; kiểm thử nguồn công khai."),
-    ]):
-        x=.68+(i%2)*6.08; y=1.55+(i//2)*2.38
-        card(s,x,y,5.78,2.08,h,b,GREEN if i%2==0 else GOLD,15)
-
-    s = new_slide(prs, "Thiết lập huấn luyện của checkpoint v3", "11 • huấn luyện")
-    card(s,.68,1.55,3.82,4.86,"Detector",
-         "YOLOv8s pretrained\n2 lớp: mango, dragonfruit\n100 epoch tối đa\nẢnh 960 px; batch 8\nAdamW; seed 42",GREEN,17)
-    card(s,4.76,1.55,3.82,4.86,"Classifier",
-         "YOLOv8s-cls pretrained\nXoài 4 lớp, thanh long 3 lớp\n50 epoch tối đa\nCrop 320 px; batch 32\nAdamW; seed 42",GOLD,17)
-    card(s,8.84,1.55,3.82,4.86,"Sau huấn luyện",
-         "Lưu best.pt từng mô hình.\n\nĐo test riêng; fit temperature và ngưỡng trên tập calibration.\n\nSao chép weight + JSON vào backend.",GREEN,16)
-
-    s = new_slide(prs, "Từ điểm số đến nhãn hiển thị", "12 • suy luận")
-    detail_rows(s,[
-        ("1","Phát hiện","Detector tìm box, mặc định conf ≥ 0,25."),
-        ("2","Cắt ảnh","Nới vùng quả 10%; cạnh crop < 64 px → chưa chắc chắn."),
-        ("3","Phân loại","Chọn classifier xoài hoặc thanh long; crop 320 px."),
-        ("4","Hiệu chỉnh","Temperature scaling; ngưỡng hiệu lực = max(0,80; ngưỡng lớp)."),
-        ("5","Lọc / trả về","Verifier tùy chọn loại quả khác; trả box, nhãn và số lượng."),
-    ],row_h=.88,gap=.08)
-
-    s = new_slide(prs, "Kết quả nhận diện trên bộ hồi quy", "07 • kết quả")
-    add_text(s,"234 ảnh nguồn công khai • 584 box chuẩn • IoU 0,5 • confidence 0,25",.72,1.46,12,.4,16,MUTED)
-    metrics=[("Precision",f"{benchmark['precision']*100:.1f}%"),("Recall",f"{benchmark['recall']*100:.1f}%"),
-             ("Sai số đếm / ảnh",f"{benchmark['count_mae']:.2f}")]
-    for i,(l,v) in enumerate(metrics):
-        x=.7+i*4.16
-        add_box(s,x,2.2,3.85,2.08,WHITE)
-        add_text(s,v,x+.16,2.46,3.5,.77,38,GREEN,True,PP_ALIGN.CENTER)
-        add_text(s,l,x+.15,3.36,3.55,.48,18,INK,align=PP_ALIGN.CENTER)
-    add_box(s,.7,4.8,12,.96,MINT)
-    add_text(s,"Số liệu box của detector v3 trước verifier; chưa phải kết quả tại vườn triển khai độc lập.",
-             .92,4.96,11.5,.64,16,NAVY)
-
-    s = new_slide(prs, "Phân tích lỗi và thử nghiệm detector", "14 • cải tiến")
-    add_text(s,"Cùng 234 ảnh / 584 box, gồm 112 ảnh âm tính",.73,1.47,11.7,.4,16,MUTED)
-    columns=[("Phiên bản","Precision","Recall","MAE đếm","FP ảnh âm tính"),
-             ("detector v3 đang cài","55,3%","82,5%","1,83","290"),
-             ("v4 sửa nhãn – thử nghiệm","81,0%","83,7%","0,64","19")]
-    for i,row in enumerate(columns):
-        y=2.08+i*.87
-        add_box(s,.73,y,11.86,.73,NAVY if i==0 else WHITE)
-        xs=[.9,4.75,6.68,8.51,10.33];ws=[3.65,1.78,1.63,1.61,2.00]
-        for j,v in enumerate(row):add_text(s,v,xs[j],y+.09,ws[j],.52,16,WHITE if i==0 else INK,i==0)
-    add_box(s,.73,5.27,11.86,1.16,MINT)
-    add_text(s,"v4 là kết quả thí nghiệm trên bộ công khai, chưa thay checkpoint đang chạy. Bộ này chỉ đo phát hiện; chưa có nhãn độ chín.",
-             .94,5.43,11.4,.8,16,NAVY)
-
-    s = new_slide(prs, "Các cải tiến sau khi xem ảnh lỗi", "phân tích lỗi")
-    card(s,.68,1.56,3.82,4.83,"Lọc quả khác",
-         "Verifier tùy chọn lọc lớp other ở ngưỡng 0,90.\n\nẢnh mận mẫu: loại 4/4 box sai; ảnh xoài đông mẫu: giữ 4/4 box.",GREEN,15)
-    card(s,4.76,1.56,3.82,4.83,"Quét ảnh đông quả",
-         "detailed_scan tăng kích thước ảnh và dùng test-time augmentation.\n\nẢnh mẫu: 4 box thay vì 2, vẫn bỏ sót một quả bị che.",GOLD,15)
-    card(s,8.84,1.56,3.82,4.83,"Hỗ trợ ảnh tối",
-         "low_light_assist tăng tương phản cho detector; classifier vẫn dùng màu gốc.\n\nMới thử trên ảnh tối tổng hợp, chưa có ảnh đêm vườn thực.",RED,15)
-
-    s = new_slide(prs, "Kết quả phân loại độ chín", "08 • kết quả")
-    mango=data["classifiers_test"]["mango_classifier"]
-    dragon=data["classifiers_test"]["dragon_classifier"]
-    card(s,.68,1.55,5.8,4.75,"Xoài",
-         f"Accuracy test: {mango['accuracy']*100:.1f}% trên {mango['test_images']} crop.\n\nChấp nhận nhãn: {mango['accepted']}; đúng {mango['accepted_correct']}.",GREEN,19)
-    card(s,6.76,1.55,5.8,4.75,"Thanh long",
-         f"Accuracy test: {dragon['accuracy']*100:.1f}% trên {dragon['test_images']} crop.\n\nChấp nhận nhãn: {dragon['accepted']}; đúng {dragon['accepted_correct']}.",GOLD,19)
-    add_text(s,"Tập test là dữ liệu đã tuyển chọn; chưa chứng minh độ chính xác trên mọi vườn và điều kiện chụp.",
-             .74,6.47,11.9,.43,14,RED)
-
-    s = new_slide(prs, "Ví dụ đầu ra trên ảnh", "09 • demo")
-    add_box(s,.7,1.55,5.9,4.72,WHITE)
-    add_picture_fit(s,PHOTO_DRAGON,.82,1.7,5.66,3.56)
-    add_text(s,"Thanh long: box, nhãn và xác suất",.9,5.43,5.5,.53,15,INK,True,PP_ALIGN.CENTER)
-    add_box(s,6.76,1.55,5.9,4.72,WHITE)
-    add_picture_fit(s,PHOTO_MANGO,6.88,1.7,5.66,3.56)
-    add_text(s,"Xoài: nhiều quả nhỏ, có nhãn chưa chắc chắn",6.88,5.43,5.66,.53,15,INK,True,PP_ALIGN.CENTER)
-    add_text(s,"Ảnh đầu ra lưu trong pipeline_check của dự án; dùng để minh họa, không thay cho chỉ số đánh giá.",
-             .75,6.46,11.7,.35,13,MUTED)
-
-    s = new_slide(prs, "Kiến trúc ứng dụng", "10 • triển khai")
-    for i,(a,b) in enumerate([
-        ("React + Ant Design", "Tải ảnh/video và hiển thị kết quả"),
-        ("FastAPI", "Kiểm tra tệp và điều phối suy luận"),
-        ("Ultralytics + PyTorch", "Detector, classifier, verifier"),
-        ("ByteTrack", "Ước lượng số quả duy nhất trong video"),
-    ]):
-        y=1.48+i*1.24
-        add_box(s,.75,y,11.84,1.04,WHITE)
-        add_box(s,.75,y,2.9,1.04,GREEN if i<3 else GOLD)
-        add_text(s,a,.97,y+.11,2.46,.78,17,WHITE,True)
-        add_text(s,b,3.9,y+.13,8.37,.74,17,INK)
-
-    s = new_slide(prs, "Đường đi của một yêu cầu ảnh", "18 • tích hợp")
-    detail_rows(s,[
-        ("1","Giao diện","Người dùng chọn JPG/PNG/WEBP; tùy chỉnh ngưỡng và chế độ quét."),
-        ("2","API kiểm tra","Giới hạn 12 MB, giải mã ảnh, xoay đúng EXIF và chuyển RGB."),
-        ("3","Suy luận","Chạy detector → crop → classifier → verifier tùy chọn."),
-        ("4","Phản hồi","JSON gồm box, nhãn, confidence, số lượng và ảnh JPEG Base64."),
-        ("5","Hiển thị","React vẽ ảnh kết quả, bảng số lượng và cảnh báo khi lỗi."),
-    ],row_h=.88,gap=.08)
-
-    s = new_slide(prs, "Nhóm đã kiểm thử ứng dụng ra sao?", "19 • kiểm chứng")
-    card(s,.68,1.56,3.82,4.83,"Dữ liệu / mô hình",
-         "Kiểm tra split không chồng nhóm, ảnh trùng, lớp thiếu, crop lỗi.\n\nĐo test classifier và bộ hồi quy detector có ảnh âm tính.",GREEN,15)
-    card(s,4.76,1.56,3.82,4.83,"API / giao diện",
-         "Kiểm tra /health, tải ảnh hợp lệ, giới hạn tệp, ảnh lỗi và phản hồi JSON.\n\nCó log thử ảnh web và HTTP trong repo.",GOLD,15)
-    card(s,8.84,1.56,3.82,4.83,"Video / triển khai",
-         "Thử ByteTrack bằng clip tổng hợp từ ảnh.\n\nDocker/Modal có hướng dẫn đóng gói; chưa có benchmark video vườn thực.",RED,15)
-
-    s = new_slide(prs, "Đếm video và giới hạn", "11 • đánh giá")
-    card(s,.68,1.56,5.8,4.8,"Video + ByteTrack",
-         "Lấy mẫu tối đa 5 khung hình/giây, theo dõi ID và chỉ đếm mỗi track một lần.\n\nAPI trả tổng số quả, số theo loài và một khung hình minh họa.",GREEN,17)
-    card(s,6.76,1.56,5.8,4.8,"Cần nói rõ khi báo cáo",
-         "Track ID có thể đổi khi quả bị che hoặc camera di chuyển.\n\nVideo mới được thử với clip tổng hợp từ ảnh; chưa đo sai số đếm trên video vườn thực.",RED,17)
-
-    s = new_slide(prs, "Kết luận và hướng phát triển", "12 • tổng kết")
-    card(s,.68,1.55,5.8,4.85,"Đã hoàn thành",
-         "Pipeline hai giai đoạn; giao diện web; API ảnh/video; phân loại có cơ chế chưa chắc chắn; tài liệu tái lập huấn luyện.",GREEN,18)
-    card(s,6.76,1.55,5.8,4.85,"Bước tiếp theo",
-         "Thu thập ảnh và video tại vườn mục tiêu; gắn nhãn đầy đủ; đo đếm và độ chín ngoài thực địa; cải thiện quả nhỏ, chồng lấp và quả nhìn giống.",GOLD,18)
-
-    s = new_slide(prs, "Nhóm thực hiện và nguồn minh chứng", "13 • phụ lục")
-    card(s,.68,1.55,5.8,4.85,"Thông tin nhóm",
-         TEAM+"\n\n"+"\n".join(MEMBERS)+"\n\nGVHD: "+LECTURER,
-         GREEN,17)
-    card(s,6.76,1.55,5.8,4.85,"Nguồn trong dự án",
-         "README.md, training/README.md, backend/README.md\n\n"
-         "v3_evaluation.json — classifier test\n\n"
-         "trial_abc_summary.json — detector benchmark",
-         GOLD,16)
-
-    s = prs.slides.add_slide(prs.slide_layouts[6])
-    add_box(s,0,0,13.333,7.5,NAVY,radius=False)
-    add_text(s,"CẢM ƠN THẦY/CÔ\nVÀ CÁC BẠN",.8,1.56,11.7,1.6,36,WHITE,True,PP_ALIGN.CENTER)
-    add_text(s,"NHÓM THỰC HIỆN • SMART ORCHARD AI",.8,3.78,11.7,.52,20,MINT,True,PP_ALIGN.CENTER)
-    add_text(s,"Thảo luận & demo",.8,4.67,11.7,.48,19,WHITE,align=PP_ALIGN.CENTER)
-    if len(prs.slides) != len(TALK_TRACKS):
-        raise ValueError(f"Slide/note mismatch: {len(prs.slides)} vs {len(TALK_TRACKS)}")
-    for slide, (_, note) in zip(prs.slides, TALK_TRACKS):
-        slide.notes_slide.notes_text_frame.text = note
-    prs.save(OUT / "Smart_Orchard_AI_Thuyet_trinh_nhom.pptx")
+    R.chapter = "D"
+    R.chapter_heading("PHỤ LỤC D. PHÂN CÔNG NHÓM")
+    P("Điền tên, mã học viên và phần việc thực tế của từng thành viên trước khi nộp.", indent=False)
+    R.table("Phân công", ["Thành viên / mã học viên", "Phần việc", "Minh chứng"],
+            [(f"{n} – {s}", "................................", "................................") for n, s in MEMBERS],
+            [6.0, 5.5, 5.0])
 
 
-def style_doc(doc):
-    sec=doc.sections[0]
-    sec.page_width=Cm(21); sec.page_height=Cm(29.7)
-    sec.top_margin=Cm(2.3); sec.bottom_margin=Cm(2.1)
-    sec.left_margin=Cm(2.8); sec.right_margin=Cm(2.2)
-    styles=doc.styles
-    normal=styles["Normal"]
-    normal.font.name="Arial"; normal.font.size=DocPt(11)
-    normal.font.color.rgb=DocRGB(31,48,58)
-    normal.paragraph_format.space_after=DocPt(6)
-    normal.paragraph_format.line_spacing=1.25
-    for name,size in [("Heading 1",16),("Heading 2",13),("Heading 3",11)]:
-        st=styles[name]; st.font.name="Arial"; st.font.size=DocPt(size); st.font.bold=True
-        st.font.color.rgb=DocRGB(15,35,49)
-        st.paragraph_format.space_before=DocPt(13); st.paragraph_format.space_after=DocPt(6)
+def slide_notes():
+    from pptx import Presentation
+    if not PPTX.exists():
+        return []
+    out = []
+    prs = Presentation(PPTX)
+    n = len(prs.slides)
+    for i, s in enumerate(prs.slides):
+        texts = [sh.text_frame.text.strip() for sh in s.shapes if sh.has_text_frame and sh.text_frame.text.strip()]
+        if i == n - 1:
+            title = texts[0]
+        elif texts and texts[0].startswith("PHẦN "):
+            title = f"{texts[0].title()} – {texts[1]}"
+        elif i == 0:
+            title = "Trang tiêu đề"
+        else:
+            title = texts[1] if len(texts) > 1 else texts[0]
+        out.append((" ".join(title.split()), s.notes_slide.notes_text_frame.text))
+    return out
 
 
-def para(doc,text="",bold=False,align=None,size=None,space_after=None):
-    p=doc.add_paragraph()
-    if align is not None:p.alignment=align
-    r=p.add_run(text);r.bold=bold
-    if size:r.font.size=DocPt(size)
-    if space_after is not None:p.paragraph_format.space_after=DocPt(space_after)
-    return p
+def page_map_from_pdf(pdf, headings):
+    """Find the physical page of each heading in a rendered first pass."""
+    pages = subprocess.run(["pdftotext", "-layout", str(pdf), "-"], capture_output=True, text=True,
+                           check=True).stdout.split("\f")
+    norm = lambda s: re.sub(r"\s+", "", s).lower()
+    npages = [norm(p) for p in pages]
+    # Skip the cover and the TOC pages (their entries repeat every heading, with dot leaders).
+    start = 0
+    for i, p in enumerate(pages):
+        if "MỤC LỤC" in p or p.count("....") >= 5:
+            start = i + 1
+        elif start:
+            break
+    mapping, cur = {}, start
+    for lvl, txt in headings:
+        if lvl > 2:
+            continue
+        key = norm(txt)[:30]
+        for j in range(cur, len(npages)):
+            if key in npages[j]:
+                mapping[txt] = j + 1
+                cur = j
+                break
+    return mapping
 
 
-def bullet(doc,text):
-    return doc.add_paragraph(text,style="List Bullet")
-
-
-def add_table(doc,heads,rows):
-    t=doc.add_table(rows=1,cols=len(heads));t.style="Light Shading Accent 1"
-    for i,h in enumerate(heads):t.rows[0].cells[i].text=h
-    for row in rows:
-        cells=t.add_row().cells
-        for i,v in enumerate(row):cells[i].text=str(v)
-    for row_index,row in enumerate(t.rows):
-        trPr=row._tr.get_or_add_trPr()
-        no_split=OxmlElement("w:cantSplit");trPr.append(no_split)
-        if row_index == 0:
-            repeat=OxmlElement("w:tblHeader");repeat.set(qn("w:val"),"true");trPr.append(repeat)
-        for cell in row.cells:
-            for p in cell.paragraphs:
-                for run in p.runs:
-                    run.font.name="Arial";run.font.size=DocPt(9.5)
-                    if row_index == 0:run.bold=True
-    doc.add_paragraph()
-    return t
-
-
-def page_break(doc):doc.add_page_break()
-
-
-def build_docx():
-    test=json.loads(METRIC_FILE.read_text())
-    detector=json.loads(REGRESSION_FILE.read_text())["models"]["v3"]["total"]
-    d=Document();style_doc(d)
-    # Cover follows the reference's centered institution, report type, course,
-    # large topic and left-aligned author/adviser block.
-    para(d,SCHOOL+"\n"+FACULTY,True,WD_ALIGN_PARAGRAPH.CENTER,14,44)
-    para(d,"BÁO CÁO BÀI TẬP LỚN",True,WD_ALIGN_PARAGRAPH.CENTER,21,13)
-    para(d,"Môn học: "+COURSE,False,WD_ALIGN_PARAGRAPH.CENTER,14,38)
-    para(d,"ĐỀ TÀI:\nNHẬN DIỆN, ĐẾM VÀ ĐÁNH GIÁ ĐỘ CHÍN\nCỦA XOÀI VÀ THANH LONG TRÊN CÂY\n(SMART ORCHARD AI)",True,WD_ALIGN_PARAGRAPH.CENTER,17,55)
-    para(d,"Báo cáo dự án nhóm",False,WD_ALIGN_PARAGRAPH.CENTER,14,33)
-    para(d,TEAM,True,size=12,space_after=5)
-    para(d,"Sinh viên thực hiện:",True,size=12,space_after=3)
-    for m in MEMBERS:para(d,"    • "+m,size=11,space_after=2)
-    para(d,"Giảng viên hướng dẫn: "+LECTURER,size=11,space_after=2)
-    para(d,"Năm học: "+YEAR,size=11,space_after=0)
-    page_break(d)
-
-    d.add_heading("MỤC LỤC",0)
-    for line in ["Tóm tắt", "Chương 1. Giới thiệu", "Chương 2. Quá trình phát triển dự án",
-                 "Chương 3. Dữ liệu và chuẩn bị", "Chương 4. Phương pháp và kiến trúc",
-                 "Chương 5. Huấn luyện và hiệu chỉnh", "Chương 6. Cài đặt hệ thống",
-                 "Chương 7. Thực nghiệm, phân tích lỗi và cải tiến",
-                 "Chương 8. Hạn chế và hướng phát triển",
-                 "Tài liệu và minh chứng trong dự án", "Phụ lục A. Gợi ý lời thuyết trình theo slide",
-                 "Phụ lục B. Cách chạy và kiểm tra bản demo", "Phụ lục C. Phân công nhóm"]:
-        para(d,line)
-    page_break(d)
-
-    d.add_heading("TÓM TẮT",0)
-    para(d,"Smart Orchard AI là hệ thống thị giác máy tính nhằm phát hiện xoài và thanh long trên cây, "
-         "đếm quả trong ảnh, ước lượng số quả duy nhất trong video và đánh giá độ chín của từng quả. "
-         "Phiên bản đang dùng tách việc định vị quả khỏi phân loại độ chín: YOLOv8s tìm vùng quả, "
-         "sau đó bộ phân loại theo từng loài xử lý crop. Dự đoán thiếu tin cậy được gắn nhãn chưa chắc chắn. "
-         "Hệ thống có FastAPI và giao diện React để thử ảnh/video. Báo cáo trình bày quy trình dữ liệu, "
-         "kiến trúc, kết quả đo được và giới hạn thực nghiệm.")
-    para(d,"Từ khóa: YOLOv8, phát hiện đối tượng, phân loại độ chín, ByteTrack, FastAPI, React.",True)
-
-    d.add_heading("CHƯƠNG 1. GIỚI THIỆU",1)
-    d.add_heading("1.1. Bối cảnh",2)
-    para(d,"Trong ảnh chụp vườn, quả có thể nhỏ, bị lá hoặc cành che, chồng lên nhau và chịu ánh sáng thay đổi. "
-         "Đếm thủ công tốn thời gian, còn đánh giá độ chín bằng màu dễ bị ảnh hưởng bởi điều kiện chụp. "
-         "Dự án tập trung vào hai loại quả: xoài và thanh long. Đây là bài toán thực nghiệm phục vụ hỗ trợ quan sát, "
-         "không thay thế việc kiểm tra trực tiếp tại vườn.")
-    d.add_heading("1.2. Mục tiêu và phạm vi",2)
-    for x in ["Phát hiện vị trí và loài của từng quả trong ảnh.",
-              "Phân loại độ chín theo thang riêng của xoài và thanh long; trả trạng thái chưa chắc chắn khi cần.",
-              "Đếm box trong ảnh và ước lượng số quả duy nhất trong video bằng theo dõi ID.",
-              "Cung cấp giao diện web và API để người dùng thử tệp và xem kết quả."]:
-        bullet(d,x)
-    para(d,"Đầu vào ảnh hỗ trợ JPG/PNG/WEBP; đầu vào video hỗ trợ MP4/MOV/WebM/AVI theo giới hạn hiện tại "
-         "của API. Đối tượng khác xoài và thanh long nằm ngoài phạm vi nhận diện mục tiêu.")
-    d.add_heading("1.3. Yêu cầu chức năng và tiêu chí quan sát",2)
-    add_table(d,["Tình huống","Đầu vào","Kết quả cần quan sát"],[
-        ["Kiểm tra ảnh vườn","Một ảnh có xoài/thanh long","Box từng quả, loài, nhãn độ chín hoặc uncertain, tổng số và số theo lớp"],
-        ["Ảnh khó","Ảnh tối hoặc nhiều quả sát nhau","Có thể bật hỗ trợ sáng/quét chi tiết; kết quả vẫn cần kiểm bằng mắt"],
-        ["Kiểm tra video","Clip ngắn","Số track quả duy nhất ước lượng theo loài và khung hình xem trước"],
-        ["Theo dõi dịch vụ","Không cần tệp","/health cho biết weight đã nạp và chế độ pipeline đang chạy"],
-    ])
-    para(d,"Những tiêu chí trên mô tả hành vi sản phẩm đã triển khai. Mục tiêu học máy cần đánh giá riêng "
-         "bằng dữ liệu có ground truth: box đúng/sai, loài đúng/sai, nhãn độ chín đúng/sai và sai số số lượng. "
-         "Không thể kết luận hiệu quả chỉ từ việc giao diện vẽ được box trên vài ảnh mẫu.")
-    d.add_heading("1.4. Thuật ngữ dùng nhất quán",2)
-    para(d,"Trong báo cáo, 'phát hiện' là xác định box và loài; 'phân loại độ chín' là dự đoán nhãn từ "
-         "crop quả; 'đếm ảnh' là số box còn lại sau lọc; 'đếm video' là số track ID được chấp nhận. "
-         "Từ 'uncertain' không có nghĩa hệ thống không thấy quả: box vẫn có thể được giữ cho phần đếm, "
-         "chỉ nhãn độ chín chưa đủ bằng chứng. Precision, recall và mAP thuộc bài toán phát hiện; "
-         "accuracy của classifier đo trên crop, không phải ảnh nguyên vườn.")
-
-    d.add_heading("CHƯƠNG 2. QUÁ TRÌNH PHÁT TRIỂN DỰ ÁN",1)
-    d.add_heading("2.1. Các mốc được ghi nhận",2)
-    para(d,"Quá trình dưới đây được dựng từ lịch sử Git, notebook, báo cáo chuẩn bị dữ liệu và các thư mục "
-         "kết quả trong repo. Đây là mốc của sản phẩm chung, không phải phân công hay đánh giá đóng góp cá nhân.")
-    add_table(d,["Thời điểm","Việc nhóm đã thực hiện","Minh chứng"],[
-        ["12/09/2026","Khởi tạo repository và định hình bài toán nhận diện quả.","Git history"],
-        ["18/09/2026","Viết notebook Colab; huấn luyện baseline YOLOv8s 7 lớp; lưu checkpoint lên Drive.","training/train_yolo.ipynb; Git history"],
-        ["24/09/2026","Chuyển sang detector 2 lớp + classifier riêng cho từng loài; thêm API suy luận có hiệu chỉnh.","training/train_two_stage.py; backend/two_stage.py"],
-        ["28/09/2026","Kiểm toán nhãn, nhập thêm dữ liệu vườn và Black_Rot; chuẩn bị dữ liệu v3, huấn luyện trên cloud.","data/prepared/two_stage_maturity_v3; runs_maturity_v3"],
-        ["30/09–02/10/2026","Thử web/API, dựng bộ hồi quy có ảnh âm tính, rà lỗi nhãn và so sánh các detector thử nghiệm.","web_test_20260930; regression_20261002"],
-    ])
-    d.add_heading("2.2. Baseline đơn giai đoạn và bài học",2)
-    para(d,"Bản đầu dùng một mô hình YOLOv8s dự đoán trực tiếp lớp kết hợp giữa loài và độ chín. "
-         "Điểm thuận tiện là một lần chạy trả box và nhãn. Tuy nhiên, nhận diện vị trí quả trong tán lá và "
-         "phân biệt các mức chín bằng màu là hai nhiệm vụ khác nhau. Nhóm giữ checkpoint 7 lớp làm baseline, "
-         "sau đó thiết kế pipeline hai giai đoạn để tối ưu và đánh giá riêng từng việc.")
-    para(d,"README còn ghi chỉ số 4 lớp rất cao từ giai đoạn cũ, nhưng chính README cảnh báo dữ liệu có biến thể "
-         "cùng ảnh gốc nằm ở nhiều split. Vì vậy tài liệu này không dùng các con số đó làm kết quả dự án hiện tại.")
-    d.add_heading("2.3. Phiên bản đang chạy và các thử nghiệm tiếp theo",2)
-    para(d,"Các weight trong backend/weights khớp với lần huấn luyện v3: detector, classifier xoài và "
-         "classifier thanh long. File calibration xoài của bản này dùng nhãn young/mature/turning/ripe. "
-         "Nhóm tiếp tục chuẩn bị bộ dữ liệu maturity_v2 với nhãn premature/early/mature/ripe và thử detector "
-         "sau rà nhãn; đây là hướng tái huấn luyện/thí nghiệm, chưa phải checkpoint được cài trong backend. "
-         "Việc phân biệt này tránh gán số liệu thử nghiệm của mô hình khác cho sản phẩm đang demo.")
-    add_table(d,["Hiện vật","Trạng thái trong repo"],[
-        ["YOLOv8s 7 lớp","Baseline cũ, chọn bằng PIPELINE_MODE=legacy"],
-        ["Pipeline hai giai đoạn v3","Weight đang cài trong backend; mặc định khi đủ tệp"],
-        ["Bộ maturity_v2","Đã chuẩn bị và kiểm toán dữ liệu; chưa thay weight v3"],
-        ["Detector v4 đã sửa nhãn","Đã đánh giá trên bộ hồi quy; chưa thay weight đang chạy"],
-    ])
-    d.add_heading("2.4. Cách nhóm chuyển phản hồi thành thay đổi",2)
-    para(d,"Quy trình phát triển có vòng lặp rõ: chạy mô hình trên ảnh có nhãn hoặc ảnh mẫu, lưu ảnh đầu ra "
-         "và log, phân loại lỗi, rồi sửa đúng phần gây lỗi. Ví dụ, false positive trên ảnh quả khác dẫn "
-         "đến bộ ảnh âm tính và verifier; bỏ sót quả đông/chồng lấp dẫn đến detailed_scan; crop quá nhỏ "
-         "và nhãn độ chín thiếu tin cậy dẫn đến trạng thái uncertain; nhãn nguồn không nhất quán dẫn đến "
-         "quy tắc cách ly và kiểm toán lại dữ liệu. Các thay đổi này được giữ riêng để đo hiệu ứng, thay vì "
-         "diễn giải ảnh demo như một phép kiểm thử tổng quát.")
-    add_table(d,["Vấn đề quan sát","Thay đổi đã làm","Cách kiểm tra / trạng thái"],[
-        ["Biến thể cùng ảnh gốc rơi vào nhiều split","Nhóm theo danh tính ảnh gốc và hash","Kiểm tra group overlap trong manifest"],
-        ["Nhãn độ chín không đồng nhất","Cách ly crop mâu thuẫn; tách nhãn detector/classifier","Báo cáo maturity audit, readiness"],
-        ["Quả khác bị nhận nhầm","Verifier và ảnh âm tính","Ảnh mẫu + benchmark detector; chưa đủ dữ liệu vườn độc lập"],
-        ["Quả chồng lấp / ánh sáng yếu","detailed_scan / low_light_assist","Kiểm tra mẫu; chưa có thử nghiệm hiện trường đủ lớn"],
-        ["Đếm lặp khung hình video","ByteTrack theo ID","Clip tổng hợp; chưa có video vườn gắn nhãn"],
-    ])
-
-    d.add_heading("CHƯƠNG 3. DỮ LIỆU VÀ CHUẨN BỊ",1)
-    d.add_heading("3.1. Nguồn và nhãn",2)
-    para(d,"Dự án kết hợp dữ liệu Roboflow với các bộ dữ liệu công khai có ảnh vườn. Các nguồn được kiểm tra "
-         "trước khi đưa vào huấn luyện. Tệp gốc và báo cáo kiểm toán dữ liệu được mô tả trong "
-         "training/README.md và data/external/README.md. Bộ detector dùng nhãn loài xoài/thanh long; "
-         "các classifier dùng nhãn độ chín của từng loài.")
-    add_table(d,["Loài","Các nhãn độ chín của mô hình hiện tại"],[
-        ["Xoài","mango_young; mango_mature; mango_turning; mango_ripe"],
-        ["Thanh long","dragonfruit_unripe; dragonfruit_ripe; dragonfruit_rotten"],
-    ])
-    para(d,"Mô hình đơn giai đoạn 7 lớp là baseline cũ. Tên nhãn trong checkpoint hai giai đoạn hiện tại "
-         "khác một phần so với baseline, vì vậy báo cáo này dùng tên từ tệp hiệu chỉnh đang cài tại backend/weights.")
-    d.add_heading("3.2. Làm sạch và chia tập",2)
-    for x in [
-        "Ánh xạ nhãn theo tên, không ghép theo mã lớp của từng nguồn.",
-        "Loại ảnh trùng và gom các biến thể tăng cường từ cùng ảnh gốc vào một tập để giảm rò rỉ.",
-        "Kiểm tra box, crop quá nhỏ, nhãn mâu thuẫn và các ảnh không đủ bằng chứng về độ chín.",
-        "Tách train, validation, calibration và test cho classifier; hiệu chỉnh ngưỡng trên tập calibration.",
-        "Không xoay hue khi tăng cường dữ liệu vì màu là tín hiệu quan trọng cho độ chín.",
-    ]:bullet(d,x)
-    para(d,"Các bước kiểm toán giúp phát hiện lỗi dữ liệu nhưng chưa bảo đảm ảnh công khai đại diện cho mọi vườn "
-         "triển khai. Kiểm tra độc lập tại vườn mục tiêu vẫn là công việc cần thực hiện.")
-
-    d.add_heading("3.3. Dữ liệu thực sự dùng cho checkpoint v3",2)
-    prep=json.loads((ROOT/"data/prepared/two_stage_maturity_v3/preparation_report.json").read_text())
-    add_table(d,["Tập dữ liệu","Train","Validation","Calibration","Test"],[
-        ["Detector",prep["detector"]["images_train"],prep["detector"]["images_val"],"—",prep["detector"]["images_test"]],
-        ["Classifier xoài",prep["mango_classifier"]["images_train"],prep["mango_classifier"]["images_val"],prep["mango_classifier"]["images_calib"],prep["mango_classifier"]["images_test"]],
-        ["Classifier thanh long",prep["dragon_classifier"]["images_train"],prep["dragon_classifier"]["images_val"],prep["dragon_classifier"]["images_calib"],prep["dragon_classifier"]["images_test"]],
-    ])
-    para(d,"Detector v3 lấy ảnh từ nhiều nguồn xoài/thanh long, gồm ảnh cây và ảnh ngoài vườn. "
-         "Dữ liệu chỉ có box loài dùng để huấn luyện detector; các crop có nhãn độ chín đủ rõ mới được đưa "
-         "vào classifier. Với xoài v3, nhãn Roboflow premature/early được gom thành young, trong khi "
-         "dữ liệu chín theo giai đoạn khác được ánh xạ thành mature, turning và ripe. Đây là lựa chọn "
-         "của v3, không phải một định nghĩa nông học đã được kiểm chứng tại mọi vườn.")
-    d.add_heading("3.4. Những lỗi cụ thể được phát hiện",2)
-    for x in [
-        "Bộ thanh long có 145 trường hợp nhãn độ chín không khớp với tên nguồn và 703 box chiếm dưới 1% diện tích ảnh; crop mơ hồ được cách ly khi dựng classifier.",
-        "Trong 675 tệp Black_Rot gốc tải về, chỉ có 270 ảnh khác nhau; loại 405 bản sao chính xác và nhóm thêm ba cặp góc chụp lặp đã xem trực quan.",
-        "Nhãn Fresh/Defect mô tả chất lượng và không tự động tương đương với ripe/rotten. Bộ Black_Rot chỉ đại diện một dạng hỏng có thể nhìn thấy.",
-        "Dữ liệu Roboflow có biến thể tên chứa .rf.; tách theo danh tính ảnh gốc, không theo tên file đã tăng cường. Kiểm tra hash để tìm ảnh trùng giữa các split.",
-        "Một số bộ nhãn là polygon hoặc keypoint; script chuyển phần hình học hợp lệ thành box YOLO. Nhãn crop quá nhỏ hoặc nhãn mâu thuẫn không được dùng cho độ chín.",
-    ]:bullet(d,x)
-    para(d,"Các con số trên phản ánh kiểm toán dữ liệu, không phải số lỗi được xác nhận thủ công cho mọi ảnh. "
-         "Báo cáo chi tiết nằm tại data/external/maturity_audit_report.json và các preparation_report.json.")
-    d.add_heading("3.5. Vai trò của từng nhóm nguồn ảnh",2)
-    source_rows=[]
-    source_labels={
-        "dragon_fruit_orchard":"Ảnh vườn thanh long, box loài",
-        "mango_farfield":"Xoài chụp xa, tăng đa dạng kích thước",
-        "mango_on_tree":"Xoài trên cây, nhiều quả trong tán",
-        "mango_orchard_daylight":"Xoài vườn ban ngày",
-        "mango_yolo":"Xoài có box định vị",
-        "rf_dragonfruit_curated":"Thanh long Roboflow đã lọc nhãn",
-        "rf_mango":"Xoài Roboflow; ảnh có thể cấp crop độ chín",
-        "rf_mango_tree":"Xoài trong cảnh cây",
-        "rf_pitaya_orchard":"Thanh long trong vườn",
-        "rf_ripe_dragon_plants":"Thanh long trên cây với quả nhỏ/xa",
-    }
-    for source,count in prep["detector_source_images"].items():
-        source_rows.append([source,count,source_labels[source]])
-    add_table(d,["Nguồn detector v3","Ảnh nguồn","Vai trò trong dữ liệu"],source_rows)
-    para(d,"'Ảnh nguồn' là số từ báo cáo chuẩn bị trước khi phân bổ split, không cộng trực tiếp thành số ảnh "
-         "train cuối cùng vì còn bước loại trùng và lọc. Những nguồn có box nhưng không có ground truth độ "
-         "chín chỉ giúp detector. Với classifier xoài, báo cáo v3 ghi 951 ảnh nguồn Mendeley mango ripening "
-         "và 3.135 ảnh Roboflow trước các bước lọc/crop/chia tập. Classifier thanh long lấy crop được "
-         "tuyển chọn và nhóm ảnh Black_Rot đã loại trùng.")
-    add_table(d,["Bộ dữ liệu công khai","Thông tin trong manifest của dự án","Phạm vi được sử dụng"],[
-        ["MangoYOLO","CC BY 4.0; box Pascal VOC","Định vị xoài; không có nhãn độ chín"],
-        ["On-tree mango segmentation","CC BY 4.0; mask/box xoài trên cây","Định vị xoài"],
-        ["DF pose v2","CC BY 4.0; box + keypoint","Lấy box thanh long cho detector"],
-        ["MangoFruitBD v2","Trang nguồn ghi CC BY-NC 3.0; README archive ghi CC BY-NC 4.0","Ảnh xoài ban ngày cho detector; dùng nghiên cứu phi thương mại"],
-        ["DF-MOD Black_Rot gốc","CC BY 4.0; 675 file trước loại trùng","Ứng viên nhãn thanh long hỏng sau kiểm tra"],
-    ])
-    para(d,"Tệp data/external/datasets.json ghi trang nguồn, điều khoản và checksum của từng bộ. "
-         "Một số bộ được khảo sát nhưng không đưa vào huấn luyện v3; vì vậy không liệt kê mọi dữ liệu "
-         "đã tải như thể đều góp vào kết quả. Khi chia sẻ hoặc sử dụng ngoài phạm vi học tập, nhóm cần "
-         "giữ phần ghi công và xem lại điều kiện của từng nguồn.")
-    d.add_heading("3.6. Tạo nhãn chung từ định dạng khác nhau",2)
-    para(d,"Script chuẩn bị đọc nhãn YOLO theo tên lớp trong data.yaml, đọc box Pascal VOC của MangoYOLO, "
-         "và đọc box COCO của tập xoài trên cây. Với nhãn segmentation YOLO, danh sách điểm polygon "
-         "được bao bằng box nhỏ nhất. Với bộ pose, chỉ box được giữ và keypoint không trở thành tọa độ "
-         "của một quả. Mọi box được đưa về định dạng tâm x, tâm y, rộng, cao theo tỷ lệ kích thước ảnh "
-         "để YOLO huấn luyện. Box có tọa độ không hợp lệ hoặc kích thước quá nhỏ bị bỏ/đánh dấu theo "
-         "quy tắc của script, rồi lưu nguồn gốc trong manifest để truy vết.")
-    add_table(d,["Nhãn nguồn","Nhãn hoặc nhiệm vụ của v3","Giải thích"],[
-        ["Xoài Roboflow: premature, early-fruit","mango_young","v3 gộp hai mức đầu"],
-        ["Xoài Roboflow: mature, ripe","mango_mature, mango_ripe","giữ mức tương ứng"],
-        ["Mango ripening: stage0/1/2/3","mature/mature/turning/ripe","theo ánh xạ trong preparation_report v3"],
-        ["Thanh long: Immature/Mature","unripe/ripe khi crop hợp lệ","đòi nhãn crop phù hợp nguồn"],
-        ["Thanh long Black_Rot gốc","dragonfruit_rotten","chỉ biểu hiện hỏng/đốm đen đã chọn"],
-        ["Fresh/Defect","không tự đổi thành độ chín","có thể dùng box loài nếu hợp lệ"],
-    ])
-    d.add_heading("3.7. Chia tập và điều kiện cho phép huấn luyện",2)
-    para(d,"Đơn vị chia tập là nhóm ảnh nguồn, không phải từng crop. Một ảnh có nhiều crop phải ở cùng "
-         "một split; biến thể Roboflow có cùng tiền tố trước '.rf.' cũng được gom. Với khung hình lấy từ "
-         "cùng clip thanh long, script giữ cả clip trong một tập và cân bằng theo số khung hình. "
-         "Ảnh trùng byte được phát hiện bằng hash; ảnh tương tự và ảnh đảo gương được nhóm bằng dấu vân "
-         "tay thị giác với giới hạn đã ghi trong README. Tập classifier có thêm calibration độc lập để "
-         "chọn ngưỡng, sau đó test chỉ dùng để báo cáo.")
-    para(d,"Trước train, readiness gate kiểm tra từng lớp và tập có đủ số nhóm nguồn tối thiểu: 80 nhóm "
-         "ở train, 20 nhóm ở validation, calibration và test. Gate còn kiểm tra lớp bị thiếu, crop dưới "
-         "64 px, nhãn xung đột, hash trùng giữa các tập và manifest không đổi sau audit. Đây là ngưỡng "
-         "tối thiểu cho một lần thử huấn luyện, không phải bảo đảm sai số thống kê hay hiệu quả ngoài vườn.")
-
-    d.add_heading("CHƯƠNG 4. PHƯƠNG PHÁP VÀ KIẾN TRÚC",1)
-    d.add_heading("4.1. Pipeline ảnh hai giai đoạn",2)
-    para(d,"Ảnh đầu vào → detector YOLOv8s tìm xoài/thanh long → cắt từng vùng quả → tùy chọn bộ kiểm tra "
-         "quả khác → classifier riêng cho từng loài → hiệu chỉnh xác suất và áp ngưỡng → box, nhãn và số lượng. "
-         "Nhờ tách bước phát hiện và phân loại, detector tập trung vào định vị còn classifier xử lý chi tiết màu và "
-         "bề mặt của quả. Trường hợp crop quá nhỏ hoặc điểm độ chín không đạt ngưỡng được gắn *_uncertain.")
-    para(d,"Khi suy luận, API mở ảnh, xử lý hướng EXIF và chuyển RGB. Detector chạy với ngưỡng box mặc định 0,25. "
-         "Mỗi box được nới thêm 10% ở các cạnh để tạo crop. Nếu cạnh ngắn dưới 64 px, hệ thống vẫn giữ box "
-         "cho phần đếm nhưng không ép ra nhãn độ chín. Các crop còn lại được đưa vào classifier tương ứng, "
-         "xử lý theo batch ở kích thước 320 px.")
-    para(d,"Với tùy chọn low_light_assist, ảnh được nâng tương phản cục bộ bằng CLAHE chỉ cho detector; "
-         "classifier vẫn nhìn màu ảnh gốc để hạn chế làm sai tín hiệu độ chín. Với detailed_scan, detector "
-         "dùng kích thước đầu vào lớn hơn (tối đa ít nhất 1280) và test-time augmentation. Đây là tùy chọn "
-         "phục vụ thử nghiệm; cần đo thêm trên ảnh vườn thực.")
-    d.add_heading("4.2. Hiệu chỉnh và nhãn chưa chắc chắn",2)
-    para(d,"Sau khi classifier tạo xác suất, backend dùng temperature của từng loài để hiệu chỉnh. "
-         "Ngưỡng áp dụng cho một nhãn là giá trị lớn hơn giữa ngưỡng lớp đã học trên tập calibration và "
-         "ngưỡng API (mặc định 0,80). Điểm thấp hơn ngưỡng này tạo mango_uncertain hoặc "
-         "dragonfruit_uncertain. Tùy chọn species_verifier.pt kiểm tra crop có phải quả khác hay không; "
-         "xác suất lớp other từ 0,90 trở lên làm box bị loại trước khi đếm.")
-    d.add_heading("4.3. Đếm trong video",2)
-    para(d,"API video lấy mẫu tối đa 5 khung hình/giây rồi dùng ByteTrack nối các box theo ID. "
-         "Mỗi ID bền vững được đếm một lần; đầu ra gồm số quả theo loài và một khung hình minh họa. "
-         "Video hiện chưa trả nhãn độ chín. Khi vật bị che hoặc camera di chuyển mạnh, ID có thể tách hoặc đổi, "
-         "dẫn đến sai số đếm.")
-    para(d,"Cụ thể, mỗi request tạo tracker riêng để ID của video trước không lẫn sang video sau. "
-         "Video bị giới hạn 50 MB, 30 giây và 1080p; phân tích tối đa 150 khung hình được chọn. "
-         "Một track cần xuất hiện ít nhất hai lần khi có đủ khung hình; loài cuối cùng lấy theo đa số quan sát. "
-         "Nếu có verifier, hệ thống chọn crop rõ nhất theo confidence của mỗi track để kiểm tra quả khác.")
-    d.add_heading("4.4. Mô hình baseline",2)
-    para(d,"Checkpoint YOLOv8s 7 lớp đơn giai đoạn vẫn có thể chọn bằng PIPELINE_MODE=legacy để so sánh. "
-         "Mặc định backend chọn pipeline hai giai đoạn khi đủ ba checkpoint mới. Các số liệu từ mô hình 4 lớp "
-         "trong README được đánh dấu cũ và có nguy cơ lạc quan do rò rỉ biến thể; không dùng làm kết quả hiện tại.")
-    d.add_heading("4.5. Dữ liệu đi qua hệ thống theo từng bước",2)
-    add_table(d,["Bước","Đầu vào","Xử lý","Đầu ra"],[
-        ["1. Đọc ảnh","Bytes từ upload","Giải mã, xoay EXIF, RGB","PIL Image chuẩn"],
-        ["2. Tìm quả","Ảnh nguyên / ảnh tăng tương phản tùy chọn","YOLOv8s + NMS","Box, loài, detection confidence"],
-        ["3. Tạo crop","Box + ảnh màu gốc","Nới 10%, chặn mép ảnh, xét cạnh 64 px","Crop hoặc uncertain do kích thước"],
-        ["4. Phân loại","Crop theo loài","YOLOv8s-cls 320 px, temperature scaling","Xác suất độ chín đã hiệu chỉnh"],
-        ["5. Quyết định","Xác suất + ngưỡng","Áp max(ngưỡng API, ngưỡng lớp); lọc other tùy chọn","Nhãn cuối hoặc uncertain"],
-        ["6. Trả kết quả","Danh sách box hợp lệ","Tổng hợp số lượng; vẽ box lên ảnh","JSON + JPEG Base64"],
-    ])
-    para(d,"Cần tách hai loại confidence: detection_confidence đo mức mô hình phát hiện box, còn "
-         "ripeness_confidence là xác suất lớp sau hiệu chỉnh của classifier. Một box có thể được phát hiện "
-         "rõ nhưng độ chín vẫn uncertain; giao diện và người đọc không nên xem hai điểm số này như một. "
-         "Đếm ảnh bằng số box cuối cùng, không phải số quả thật nếu mô hình bỏ sót hoặc tạo box sai.")
-    d.add_heading("4.6. Lý do dùng nhãn uncertain",2)
-    para(d,"Mức độ chín có thể không xác định từ ảnh vì quả quá nhỏ, bị che hoặc màu bị ảnh hưởng bởi ánh "
-         "sáng. Ép mọi crop vào một lớp sẽ khiến kết quả có vẻ chắc chắn hơn bằng chứng. Bởi vậy pipeline "
-         "vẫn báo đã tìm thấy quả, nhưng trả *_uncertain nếu crop nhỏ hoặc điểm lớp thấp hơn ngưỡng. "
-         "Cách này đánh đổi độ phủ của nhãn độ chín lấy độ tin cậy cao hơn trên những nhãn được chấp nhận. "
-         "Đánh đổi ấy phải được báo cùng coverage: ví dụ ở test xoài v3, 179/234 crop được chấp nhận, "
-         "không chỉ báo accuracy trên tập được chấp nhận.")
-    d.add_heading("4.7. Tùy chọn cho ảnh khó và chi phí tính toán",2)
-    para(d,"low_light_assist biến đổi độ tương phản trong không gian LAB bằng CLAHE, chỉ cho nhánh phát "
-         "hiện. Giữ crop phân loại từ ảnh gốc là quyết định quan trọng vì classifier phụ thuộc màu. "
-         "detailed_scan cho ảnh đông quả tăng giới hạn kích thước đầu vào lên ít nhất 1280 px, giảm "
-         "ngưỡng NMS IoU từ 0,7 xuống 0,5 và bật test-time augmentation. Các tùy chọn tăng công việc "
-         "suy luận; ảnh nhỏ được giới hạn phóng đại xấp xỉ hai lần để tránh mất lợi ích khi phóng quá mức. "
-         "Tài liệu không công bố số mili giây hay FPS vì repo chưa có benchmark tốc độ ổn định cho "
-         "toàn pipeline trên thiết bị triển khai.")
-
-    d.add_heading("CHƯƠNG 5. HUẤN LUYỆN VÀ HIỆU CHỈNH",1)
-    d.add_heading("5.1. Trình tự chạy",2)
-    for x in [
-        "Nhập nguồn ảnh, nhãn và metadata; kiểm tra file đọc được, box hợp lệ, nguồn có đủ lớp.",
-        "Dựng detector và hai classifier thành ba tập riêng; tách theo nhóm ảnh gốc, xuất manifest và báo cáo readiness.",
-        "Huấn luyện detector trước, sau đó huấn luyện classifier xoài và thanh long; mỗi stage có thể tiếp tục từ checkpoint khi bị ngắt.",
-        "Đánh giá trên test của từng stage; fit temperature và chọn ngưỡng lớp trên calibration, không dùng test để chọn ngưỡng.",
-        "Sao chép best.pt và calibration.json vào backend/weights; kiểm tra /health rồi thử ảnh/video mẫu.",
-    ]:bullet(d,x)
-    d.add_heading("5.2. Cấu hình lần huấn luyện v3",2)
-    add_table(d,["Cấu hình","Detector","Classifier xoài / thanh long"],[
-        ["Mô hình gốc","yolov8s.pt","yolov8s-cls.pt"],
-        ["Ảnh đầu vào","960 px","320 px"],
-        ["Batch","8","32"],
-        ["Epoch tối đa","100","50"],
-        ["Optimizer / seed","AdamW / 42","AdamW / 42"],
-        ["Early stopping patience","25","15"],
-    ])
-    para(d,"Các cấu hình trên đọc từ args.yaml của lần runs_maturity_v3, không suy ra từ mã đào tạo đã thay đổi "
-         "sau lần chạy. Quá trình dùng checkpoint pretrained, ảnh nhỏ không bị đổi hue (hsv_h=0) và "
-         "không áp dụng auto_augment cho classifier. Kết quả best.pt được chọn trong quá trình huấn luyện, "
-         "sau đó đánh giá trên test tách riêng.")
-    d.add_heading("5.3. Lưu mô hình và khả năng tái lập",2)
-    para(d,"Notebook Colab và script hỗ trợ chứa các bước nhập nguồn, chuẩn bị, kiểm toán, huấn luyện, "
-         "kiểm thử và sao chép artifact. Checkpoint được lưu trên Drive/cloud để tránh mất sau khi runtime "
-         "ngắt; backend chỉ cần ba tệp trọng số, hai JSON calibration và verifier tùy chọn. "
-         "Repo giữ cả weight v3 đang chạy và checkpoint 7 lớp cũ để có thể so sánh.")
-    d.add_heading("5.4. Điều gì được lưu sau mỗi stage",2)
-    add_table(d,["Stage","Tệp chính","Mục đích"],[
-        ["Chuẩn bị","manifest.csv, preparation_report.json, data_readiness.json","Truy vết nguồn, split và điều kiện huấn luyện"],
-        ["Detector","detector/weights/best.pt, results.csv, hình validation/test","Chọn checkpoint và xem lỗi định vị"],
-        ["Classifier xoài","mango_classifier/weights/best.pt, calibration.json","Suy luận bốn mức xoài và ngưỡng"],
-        ["Classifier thanh long","dragon_classifier/weights/best.pt, calibration.json","Suy luận ba mức thanh long và ngưỡng"],
-        ["Tích hợp","backend/weights/*.pt và *calibration.json","Nạp cùng lúc khi API khởi động"],
-    ])
-    para(d,"Script train kiểm tra manifest bằng SHA256 trước khi huấn luyện classifier để tránh đánh giá "
-         "một tập khác với tập đã audit. Tùy chọn resume dùng last.pt khi lần chạy chưa kết thúc và dùng "
-         "best.pt khi stage đã xong; nếu thiếu checkpoint cần thiết, script báo lỗi thay vì âm thầm "
-         "huấn luyện một stage khác. Notebook Colab tách detector, xoài và thanh long thành các bước "
-         "độc lập để có thể chạy lại sau khi mất kết nối.")
-    d.add_heading("5.5. Hiệu chỉnh xác suất và chọn ngưỡng",2)
-    para(d,"Sau khi classifier huấn luyện, calibration không đổi lớp dự đoán mà điều chỉnh độ sắc của "
-         "phân bố xác suất bằng temperature T. Có thể viết ở mức khái niệm: p_i' = softmax(log(p_i)/T). "
-         "Với T lớn hơn 1, phân bố thường bớt tự tin; với T nhỏ hơn 1, phân bố sắc hơn. T được fit "
-         "trên tập calibration; script đo expected calibration error (ECE) trước và sau khi fit, rồi tìm "
-         "ngưỡng theo lớp để đạt mục tiêu precision đặt trước trên tập này. Mục tiêu mặc định trong script "
-         "là 0,80, nhưng là tiêu chí trên calibration, không bảo đảm precision tương tự ngoài vườn.")
-    calib_mango=json.loads((ROOT/"backend/weights/mango_calibration.json").read_text())
-    calib_dragon=json.loads((ROOT/"backend/weights/dragon_calibration.json").read_text())
-    add_table(d,["Classifier","Temperature","Số mẫu calibration","ECE trước → sau"],[
-        ["Xoài",f"{calib_mango['temperature']:.3f}",calib_mango["calibration_samples"],f"{calib_mango['ece_before']:.3f} → {calib_mango['ece_after']:.3f}"],
-        ["Thanh long",f"{calib_dragon['temperature']:.3f}",calib_dragon["calibration_samples"],f"{calib_dragon['ece_before']:.3f} → {calib_dragon['ece_after']:.3f}"],
-    ])
-    para(d,"Ví dụ, với nhãn mango_turning, ngưỡng lớp trong JSON v3 khoảng 0,819. Khi API để mức "
-         "0,80, ngưỡng hiệu lực vẫn là 0,819; với mango_ripe có ngưỡng lớp khoảng 0,544, ngưỡng "
-         "hiệu lực trở thành 0,80. Nếu xác suất đã hiệu chỉnh nhỏ hơn ngưỡng hiệu lực, kết quả được "
-         "gắn mango_uncertain. Cần cẩn thận khi chuyển checkpoint: JSON calibration phải khớp đúng "
-         "tên và thứ tự lớp của classifier, nếu không backend từ chối nạp.")
-    d.add_heading("5.6. Các lớp huấn luyện và các phiên bản cần phân biệt",2)
-    para(d,"Mã chuẩn bị dữ liệu đang trong quá trình phát triển tiếp và profile maturity_v2 dùng bốn "
-         "mức xoài premature/early/mature/ripe. Checkpoint v3 hiện cài ở backend lại dùng "
-         "young/mature/turning/ripe. Không thể lấy accuracy của classifier v3 để tuyên bố hiệu quả "
-         "cho bộ nhãn maturity_v2; muốn so sánh cần train weight mới trên đúng split và đánh giá lại. "
-         "Đây là một giới hạn quan trọng khi nhóm thuyết trình tiến độ dự án đang phát triển.")
-
-    d.add_heading("CHƯƠNG 6. CÀI ĐẶT HỆ THỐNG",1)
-    add_table(d,["Thành phần","Công nghệ","Vai trò"],[
-        ["AI","Ultralytics YOLOv8, PyTorch","Phát hiện và phân loại"],
-        ["Theo dõi","ByteTrack, OpenCV","Đếm đối tượng theo ID trong video"],
-        ["Backend","FastAPI, Python","API, suy luận và trả JSON/ảnh"],
-        ["Frontend","React, TypeScript, Vite, Ant Design","Tải tệp, điều chỉnh ngưỡng, xem kết quả"],
-        ["Triển khai","Docker, Modal (tùy chọn)","Đóng gói và chạy ứng dụng"],
-    ])
-    d.add_heading("6.1. Luồng sử dụng",2)
-    para(d,"Người dùng mở giao diện, chọn ảnh hoặc video và gọi API. Với ảnh, giao diện có thể chỉnh "
-         "ngưỡng phát hiện, ngưỡng độ chín, hỗ trợ ảnh tối và quét chi tiết ảnh nhiều quả. Backend trả ảnh đã "
-         "vẽ box, danh sách phát hiện và số lượng theo lớp. Với video, backend trả ước lượng số quả duy nhất.")
-    d.add_heading("6.2. Điểm cuối API",2)
-    add_table(d,["Đường dẫn","Chức năng"],[
-        ["GET /health","Trạng thái mô hình và pipeline"],
-        ["POST /detect","Phân tích ảnh, mặc định conf=0,25 và ngưỡng độ chín=0,80"],
-        ["POST /detect-video","Theo dõi và đếm quả trong video ngắn"],
-        ["GET /docs","Tài liệu API tương tác"],
-    ])
-
-    d.add_heading("6.3. Từ thao tác trên web đến kết quả",2)
-    para(d,"Frontend React dùng thành phần FruitDetector.tsx cho hai luồng tệp. Trước khi gửi, giao diện kiểm "
-         "tra định dạng và dung lượng ảnh 12 MB/video 50 MB. Ảnh được gửi qua FormData tới /detect kèm "
-         "các tham số conf_threshold, ripeness_threshold, low_light_assist và detailed_scan. Backend xác "
-         "thực dữ liệu, chạy pipeline và trả JSON gồm danh sách box, confidence, số lượng từng nhãn và "
-         "annotated_image_base64. Giao diện hiển thị ảnh có box cùng bảng thống kê; lỗi API được thông báo "
-         "ngay trên trang.")
-    para(d,"Khi khởi động, FastAPI tự chọn pipeline hai giai đoạn nếu các weight cần thiết tồn tại; "
-         "nếu không sẽ rơi về baseline cũ. GET /health cho biết trạng thái model và pipeline_mode, "
-         "giúp kiểm tra bản demo đang dùng đúng phiên bản. Có thể ép PIPELINE_MODE=legacy để so sánh. "
-         "Frontend đã build có thể được FastAPI phục vụ tại cùng URL; Docker và modal_app.py cung cấp "
-         "đường đóng gói triển khai, còn DEPLOY_MODAL.md là hướng dẫn vận hành.")
-    d.add_heading("6.4. Phần nào đã được kiểm thử",2)
-    para(d,"Repo có test cho chuẩn bị dữ liệu, ngưỡng calibration và helper notebook. Thư mục "
-         "web_test_20260930 và regression_20261002 chứa kết quả chạy web/API. HTTP smoke trên bốn ảnh "
-         "ghi nhận mã 200 và số box trả về; bộ API smoke riêng kiểm tra khởi tạo model và gọi handler trực "
-         "tiếp, không phải thử transport HTTP. Video mới được thử bằng clip tổng hợp từ các ảnh được cung cấp; "
-         "chưa có phép đo trên video vườn gắn nhãn.")
-    d.add_heading("6.5. Cấu trúc mã nguồn và trách nhiệm",2)
-    add_table(d,["Đường dẫn","Trách nhiệm chính"],[
-        ["training/prepare_two_stage_data.py","Nhập nguồn, chuẩn hóa box/crop, chia split, xuất manifest và readiness"],
-        ["training/train_two_stage.py","Huấn luyện ba stage, đo test, hiệu chỉnh confidence"],
-        ["training/train_two_stage_colab.ipynb","Chạy tuần tự từng stage trên Colab, hỗ trợ resume"],
-        ["backend/two_stage.py","Luồng ảnh: detector, crop, classifier, verifier, vẽ kết quả"],
-        ["backend/video.py","Đọc video, ByteTrack, đếm ID, tạo ảnh preview"],
-        ["backend/app.py","Khởi tạo weight, validate request, expose endpoint"],
-        ["frontend/src/components/FruitDetector.tsx","Tải ảnh/video, lựa chọn ngưỡng, gọi API, hiển thị"],
-        ["modal_app.py; Dockerfile; DEPLOY_MODAL.md","Đóng gói và hướng dẫn triển khai"],
-    ])
-    d.add_heading("6.6. Hợp đồng dữ liệu của API ảnh",2)
-    para(d,"POST /detect nhận một tệp multipart/form-data tên file. Query conf_threshold mặc định 0,25 "
-         "và bị giới hạn trong [0,01;1,00]; ripeness_threshold mặc định 0,80 và bị giới hạn trong "
-         "[0,50;0,99]. low_light_assist và detailed_scan là hai cờ boolean. API từ chối tệp không phải "
-         "ảnh, ảnh trên 12 MB hoặc ảnh không giải mã được. Với pipeline legacy, hai cờ hỗ trợ ảnh khó "
-         "bị từ chối vì chúng chỉ được cài cho hai giai đoạn.")
-    add_table(d,["Trường trong response","Ý nghĩa"],[
-        ["success, filename, pipeline_mode","Trạng thái xử lý, tên tệp, mode đang dùng"],
-        ["total_count","Số box cuối sau lọc trong ảnh"],
-        ["counts","Bảng số box theo từng nhãn đầu ra"],
-        ["detections[].bbox","[x_min, y_min, x_max, y_max] theo pixel của ảnh"],
-        ["detections[].detection_confidence","Độ tin cậy phát hiện box"],
-        ["detections[].ripeness_confidence","Điểm lớp độ chín sau calibration"],
-        ["detections[].uncertain","Có/không bị từ chối nhãn độ chín"],
-        ["annotated_image_base64","JPEG đã vẽ box để hiển thị trực tiếp"],
-    ])
-    para(d,"Về mặt diễn giải, counts không phải sản lượng thật của cây: nếu detector tạo hai box cho một "
-         "quả hoặc bỏ sót quả bị che, bảng này cũng sai tương ứng. Với ảnh, hệ thống không gộp ID theo "
-         "thời gian. Người dùng nên giữ ảnh gốc để đối chiếu kết quả.")
-    d.add_heading("6.7. Quy trình demo và vận hành",2)
-    for x in [
-        "Khởi động backend, mở GET /health và xác nhận model_loaded=true, pipeline_mode=two-stage; kiểm tra other_fruit_filter khi muốn demo verifier.",
-        "Mở web React, tải một ảnh thanh long dễ quan sát; ghi lại tổng box, nhãn và ảnh đã vẽ. Sau đó thử một ảnh xoài đông quả để giải thích uncertain và detailed_scan.",
-        "Nếu trình bày ảnh tối, bật low_light_assist và so sánh trên cùng ảnh; chỉ mô tả thay đổi quan sát được, không công bố cải thiện tổng quát từ một ví dụ.",
-        "Tải một video ngắn trong giới hạn; đọc tổng track và lời nhắc rằng đây là ước lượng. Không dùng một video demo để công bố accuracy đếm video.",
-        "Khi cần so sánh baseline, dùng PIPELINE_MODE=legacy rồi khởi động lại dịch vụ; ghi rõ đã đổi mô hình và schema nhãn.",
-    ]:bullet(d,x)
-    para(d,"Ở môi trường cloud, tài liệu DEPLOY_MODAL.md mô tả cách build frontend và đóng gói cùng backend "
-         "trên một URL. Sự tồn tại của cấu hình triển khai không tự chứng minh uptime, tốc độ hay chi phí; "
-         "các chỉ số vận hành cần đo riêng nếu nhóm muốn trình bày như kết quả.")
-
-    d.add_heading("CHƯƠNG 7. THỰC NGHIỆM, PHÂN TÍCH LỖI VÀ CẢI TIẾN",1)
-    d.add_heading("7.1. Phát hiện đối tượng",2)
-    para(d,"Bộ hồi quy công khai ngày 02/10/2026 gồm 234 ảnh và 584 box chuẩn, có cả ảnh âm tính. "
-         "Đánh giá detector v3 với confidence 0,25, IoU ghép cặp 0,5 và kích thước ảnh 960. "
-         "Kết quả dưới đây là phát hiện đối tượng trước verifier tùy chọn, không đo độ chín.")
-    add_table(d,["Chỉ số","Giá trị"],[
-        ["Precision",f"{detector['precision']*100:.1f}%"],
-        ["Recall",f"{detector['recall']*100:.1f}%"],
-        ["Sai số đếm tuyệt đối trung bình / ảnh",f"{detector['count_mae']:.2f}"],
-        ["TP / FP / FN",f"{detector['tp']} / {detector['fp']} / {detector['fn']}"],
-    ])
-    para(d,"Cách đọc chỉ số: TP là box dự đoán ghép được với box chuẩn đúng loài ở IoU tối thiểu "
-         "0,5; FP là box dư hoặc sai loài; FN là box chuẩn bị bỏ sót. Precision = TP/(TP+FP), còn "
-         "recall = TP/(TP+FN). Với số liệu này, 482/(482+389) ≈ 55,3% và 482/(482+102) ≈ 82,5%. "
-         "Sai số đếm tuyệt đối trung bình (MAE) là tổng |số dự đoán − số chuẩn| chia số ảnh; báo cáo "
-         "ghi tổng sai số 429 trên 234 ảnh, tức khoảng 1,83. Chỉ số gộp không cho biết ảnh nào lỗi "
-         "nặng, nên nhóm còn xem theo nguồn và ảnh âm tính.")
-    para(d,"Bộ ảnh này không phải tập vườn triển khai độc lập. Nhiều false positive trên ảnh quả khác là "
-         "vấn đề còn tồn tại; bộ kiểm tra loài tùy chọn có kết quả thử riêng nhưng chưa được chứng minh trên "
-         "cùng toàn bộ benchmark.")
-    d.add_heading("7.1.1. Kết quả thay đổi theo nguồn ảnh",3)
-    source_eval=test["detector_per_source_conf025_iou05"]
-    add_table(d,["Nguồn của bộ kiểm tra riêng","Ảnh","Số quả chuẩn","Precision v3","Recall v3"],[
-        [label,source_eval[key]["images"],source_eval[key]["fruits"],
-         f"{source_eval[key]['v3_precision']*100:.1f}%",f"{source_eval[key]['v3_recall']*100:.1f}%"]
-        for key,label in [
-            ("dragon_fruit_orchard","Thanh long vườn"),
-            ("mango_farfield","Xoài chụp xa"),
-            ("mango_on_tree","Xoài trên cây"),
-            ("rf_mango_tree","Xoài Roboflow trên cây"),
-            ("rf_pitaya_orchard","Thanh long Roboflow vườn"),
-            ("rf_ripe_dragon_plants","Thanh long trên cây, nhiều quả nhỏ"),
-        ]
-    ])
-    para(d,"Bảng nguồn này là phép kiểm tra khác với bộ hồi quy 234 ảnh: đa số nguồn lấy 40 ảnh, "
-         "nguồn cuối lấy 15 ảnh. Số đo cho thấy mô hình không ổn định đồng đều: recall 53,2% ở nhóm "
-         "rf_ripe_dragon_plants thấp hơn nhiều so với các nguồn dễ hơn. Sự khác biệt có thể đến từ kích "
-         "thước quả, che khuất, góc chụp và chất lượng nhãn; bảng tự nó không chứng minh nguyên nhân. "
-         "Khi báo cáo, cần nêu rõ từng tập và tránh gộp các kết quả với phép hồi quy 234 ảnh.")
-    d.add_heading("7.2. Phân loại độ chín trên crop test",2)
-    mango=test["classifiers_test"]["mango_classifier"]
-    dragon=test["classifiers_test"]["dragon_classifier"]
-    add_table(d,["Bộ phân loại","Số crop test","Accuracy","Nhãn được chấp nhận"],[
-        ["Xoài",mango["test_images"],f"{mango['accuracy']*100:.1f}%",f"{mango['accepted_correct']}/{mango['accepted']} đúng"],
-        ["Thanh long",dragon["test_images"],f"{dragon['accuracy']*100:.1f}%",f"{dragon['accepted_correct']}/{dragon['accepted']} đúng"],
-    ])
-    para(d,"Accuracy thô xoài 90,17% có nghĩa khoảng 211/234 crop được phân loại đúng trước bước "
-         "từ chối độ tin cậy. Trong 179 crop được chấp nhận, 174 đúng, tức độ đúng có điều kiện "
-         "174/179 ≈ 97,2%, nhưng coverage chỉ 179/234 ≈ 76,5%. Năm crop được chấp nhận vẫn sai. "
-         "Tập test thanh long 131/131 đúng và cùng số được chấp nhận; kết quả này rất tốt trong phạm vi "
-         "tập đã tuyển chọn nhưng quá nhỏ và quá đồng nhất để tuyên bố bao quát mọi biểu hiện hỏng.")
-    add_table(d,["Lớp xoài trong test v3","Đúng / tổng lớp","Nhận xét"],[
-        ["mango_young","64/74","dễ nhầm với mature ở một số crop"],
-        ["mango_mature","76/87","11 trường hợp bị nhầm sang young"],
-        ["mango_turning","24/24","tập test lớp này chỉ 24 crop"],
-        ["mango_ripe","47/49","2 trường hợp bị nhầm sang young"],
-    ])
-    matrix=ROOT/"fruit_detection_runs_gcp_review/4169118715503181824/mango_classifier_test/confusion_matrix.png"
-    if matrix.exists():
-        para(d,"Hình 7.1. Ma trận nhầm lẫn của classifier xoài v3 trên 234 crop test; trục ngang là nhãn thật.",True)
-        d.add_picture(str(matrix),width=Cm(12.6))
-        para(d,"Đường chéo biểu thị dự đoán đúng. Lỗi nổi bật là 11 crop mature được dự đoán young và "
-             "8 crop young được dự đoán mature; điều này phù hợp với việc hai mức đầu có dấu hiệu hình "
-             "ảnh gần nhau. Ma trận chỉ thuộc classifier trên crop test, không phản ánh lỗi box của detector.")
-    para(d,"Đây là test trên dữ liệu đã tuyển chọn cho classifier. Chỉ số thanh long 100% trên 131 crop "
-         "không đồng nghĩa hiệu quả 100% trên ảnh vườn mới. Nhãn độ chín trong bộ ảnh vườn dùng đánh giá "
-         "detector hiện không có ground truth, nên chưa đo accuracy độ chín đầu-cuối tại vườn.")
-    para(d,"Cũng cần tách accuracy của classifier khi nó nhận crop chuẩn khỏi hiệu quả thực tế khi crop "
-         "được tạo từ detector: box lệch, quá nhỏ hoặc chứa nhiều quả có thể làm nhãn độ chín sai dù "
-         "classifier đạt điểm cao trên crop test. Vì vậy đánh giá đầu-cuối cần một bộ ảnh vườn mới có cả "
-         "box và nhãn độ chín của từng quả, rồi đo phát hiện, nhãn và số lượng trên cùng ảnh.")
-    d.add_heading("7.3. Phân tích lỗi và thử nghiệm cải tiến",2)
-    para(d,"Bộ hồi quy có 112 ảnh âm tính giúp lộ ra vấn đề: v3 tạo 290 false box trên ảnh không chứa "
-         "xoài/thanh long. Các cảnh xoài nhiều quả nhỏ và quả nhìn giống cũng gây bỏ sót hoặc nhận nhầm. "
-         "Nhóm rà nhãn và thử detector mới trên đúng benchmark để so sánh cùng ngưỡng. Bản v4_repaired "
-         "có kết quả tốt hơn về false positive và sai số đếm, nhưng đây là checkpoint thử nghiệm, chưa cài "
-         "vào backend và chưa kiểm tra độc lập ở vườn mục tiêu.")
-    comparison=json.loads((ROOT/"fruit_detection_runs_gcp_review/regression_20261002/comparison.json").read_text())
-    v4=comparison["models"]["v4_repaired"]["total"]
-    add_table(d,["Detector","Precision","Recall","MAE đếm/ảnh","False box ảnh âm tính"],[
-        ["detector v3 đang cài",f"{detector['precision']*100:.1f}%",f"{detector['recall']*100:.1f}%",f"{detector['count_mae']:.2f}",detector["negative_false_boxes"]],
-        ["v4_repaired thử nghiệm",f"{v4['precision']*100:.1f}%",f"{v4['recall']*100:.1f}%",f"{v4['count_mae']:.2f}",v4["negative_false_boxes"]],
-    ])
-    para(d,"comparison.json ghi split=val: đây là so sánh detector trên bộ nguồn công khai, không đánh "
-         "giá độ chín. Việc chọn triển khai "
-         "checkpoint mới cần thêm kiểm tra độc lập, đặc biệt với quả nhỏ, ảnh tối và vườn Việt Nam.")
-    para(d,"Ở tầng suy luận, nhóm bổ sung verifier tùy chọn để loại crop giống loại quả khác. "
-         "Theo backend/README.md, ngưỡng other=0,90 loại cả bốn box sai trong ảnh mận mẫu và giữ "
-         "bốn box xoài trong ảnh xoài đông mẫu. Trên 846 box phát hiện khớp từ 250 ảnh quả hold-out, "
-         "verifier loại 2/650 box xoài và 1/196 box thanh long. Đây là kiểm thử giới hạn, không chứng "
-         "minh khả năng từ chối mọi loại quả chưa thấy.")
-    para(d,"Để hỗ trợ cảnh khó, detailed_scan tăng kích thước suy luận và bật test-time augmentation: "
-         "trên ảnh chồng lấp mẫu, số box xoài tăng từ hai lên bốn nhưng vẫn bỏ sót quả một phần. "
-         "low_light_assist tăng tương phản chỉ cho detector; kiểm thử ảnh tối tổng hợp cho thấy cải thiện "
-         "recall, nhưng chưa được đánh giá bằng ảnh đêm vườn thật.")
-    d.add_heading("7.4. Minh họa kết quả",2)
-    add_table(d,["Ảnh mẫu trong pipeline_check","Box đầu ra","Tóm tắt nhãn"],[
-        ["dragon-fruit-pucka-fertilizer-1.jpg",3,"3 dragonfruit_ripe"],
-        ["tru-cay-thanh-long.jpg",22,"21 dragonfruit_ripe; 1 dragonfruit_unripe"],
-        ["oxi-house-cay-xoai-tu-quy-...jpg",46,"25 mango_young; 21 mango_uncertain"],
-        ["images.jpeg",11,"10 mango_ripe; 1 mango_uncertain"],
-    ])
-    para(d,"Bảng chỉ mô tả đầu ra mô hình trong các ảnh thử được lưu kèm v3_evaluation.json. Không có "
-         "box/độ chín chuẩn cho những ảnh này trong báo cáo, nên 46 box không thể tự suy ra rằng ảnh thật "
-         "có đúng 46 quả. Các ảnh đông quả giúp nhóm nhận ra crop nhỏ và trạng thái uncertain xuất hiện "
-         "thường xuyên, từ đó quyết định giữ nhãn chưa chắc chắn trong giao diện.")
-    if PHOTO_DRAGON.exists():
-        para(d,"Hình 7.2. Ảnh đầu ra thanh long từ pipeline hiện tại.",True)
-        d.add_picture(str(PHOTO_DRAGON),width=Cm(12.8))
-    if PHOTO_MANGO.exists():
-        para(d,"Hình 7.3. Ảnh xoài nhiều quả, gồm nhãn chưa chắc chắn.",True)
-        d.add_picture(str(PHOTO_MANGO),width=Cm(12.8))
-    para(d,"Các ảnh minh họa là kết quả chạy mẫu lưu trong thư mục pipeline_check; không thay cho "
-         "đánh giá định lượng. API video hiện được kiểm tra bằng clip tổng hợp từ ảnh, chưa có bộ video vườn thực "
-         "được gắn nhãn để báo cáo sai số đếm.")
-
-    d.add_heading("CHƯƠNG 8. HẠN CHẾ VÀ HƯỚNG PHÁT TRIỂN",1)
-    for x in [
-        "Quả nhỏ, bị che khuất hoặc chồng lấp vẫn có thể bị bỏ sót; ảnh quả khác có thể gây false positive.",
-        "Độ chín xoài là bài toán khó: màu và các giai đoạn gần nhau; cơ chế chưa chắc chắn làm giảm số nhãn được chấp nhận.",
-        "Thiếu ảnh và video tại đúng vườn, camera và điều kiện sáng mục tiêu để đánh giá độc lập đầu-cuối.",
-        "ByteTrack ước lượng số quả duy nhất, nhưng chưa có phép đo định lượng trên video vườn thực.",
-    ]:bullet(d,x)
-    para(d,"Hướng tiếp theo là thu thập dữ liệu thực địa có box và nhãn độ chín đáng tin cậy, giữ tách biệt "
-         "với train; đo precision, recall, sai số đếm và độ chín trên cùng bộ ảnh/video; bổ sung quả nhìn "
-         "giống và các cảnh đông quả; sau đó tinh chỉnh mô hình và ngưỡng dựa trên lỗi quan sát được.")
-    d.add_heading("8.1. Những kết luận hiện chưa thể đưa ra",2)
-    for x in [
-        "Chưa thể nói mô hình đếm chính xác ở một vườn cụ thể, vì chưa có bộ ảnh/video độc lập của vườn đó với mọi quả được gắn box.",
-        "Chưa thể nói thanh long đạt độ chính xác độ chín 100% ngoài thực tế; con số 100% chỉ thuộc 131 crop test đã tuyển chọn.",
-        "Chưa thể nói verifier loại được mọi quả không phải xoài/thanh long; ảnh mận mẫu và tập matched boxes không bao trùm mọi loài quả.",
-        "Chưa thể nói detailed_scan hoặc low_light_assist luôn tốt hơn; mới có thử nghiệm ảnh mẫu và kiểm tra tối tổng hợp.",
-        "Chưa thể chuyển kết quả detector v4_repaired thành kết quả của sản phẩm demo, vì backend hiện còn cài weight v3.",
-    ]:bullet(d,x)
-    d.add_heading("8.2. Kế hoạch đánh giá thực địa đề xuất",2)
-    add_table(d,["Bước","Cách thực hiện","Đầu ra cần lưu"],[
-        ["1. Lấy mẫu","Chụp nhiều cây, buổi sáng/trưa/chiều, ảnh tối, nhiều góc; quay video ổn định và rung nhẹ","Danh sách vườn/camera/ngày và tệp gốc"],
-        ["2. Gắn nhãn","Đánh box mọi quả nhìn thấy; ghi loài, độ chín nếu chắc, độ che khuất; hai người kiểm tra mẫu khó","Bộ ground truth có hướng dẫn nhãn"],
-        ["3. Khóa test","Giữ riêng ảnh/video của cây, ngày hoặc vườn không dùng để train/chọn ngưỡng","Manifest split và hash chống rò rỉ"],
-        ["4. Đo ảnh","Precision, recall, mAP, sai số đếm và confusion độ chín đầu-cuối","Bảng theo loài, kích thước, ánh sáng, mật độ"],
-        ["5. Đo video","Đếm quả thật duy nhất theo đoạn video, đối chiếu ID đứt/nhân đôi","MAE theo clip, FP/FN track; ví dụ lỗi"],
-        ["6. Quyết định","So v3 với bản sửa nhãn dưới cùng điều kiện; chỉ thay checkpoint khi vượt mục tiêu đã thống nhất","Biên bản chọn model và giới hạn sử dụng"],
-    ])
-    para(d,"Với nhãn độ chín, nhóm cần thống nhất định nghĩa có thể nhận bằng ảnh cho từng mức, nhất là "
-         "xoài young/mature/turning và thanh long rotten. Những quả không đủ bằng chứng nên được đánh "
-         "dấu 'không xác định' trong ground truth, thay vì buộc người gắn nhãn đoán. Cách thiết kế test "
-         "này giúp đo cả tỷ lệ từ chối nhãn của hệ thống, không chỉ accuracy trên các trường hợp dễ.")
-    d.add_heading("8.3. Thứ tự cải tiến sau khi có dữ liệu mới",2)
-    para(d,"Ưu tiên đầu là lỗi có tác động lớn nhất đến sản phẩm: false positive từ quả khác và bỏ sót "
-         "quả nhỏ/chồng lấp. Tiếp theo là cải thiện độ chín xoài bằng nhãn chất lượng cao và kiểm tra "
-         "calibration trên dữ liệu mới. Cuối cùng là cải thiện track ID trong video bằng cảnh di chuyển "
-         "thực, xử lý trùng ID và đo tốc độ suy luận trên thiết bị dự kiến. Mỗi thay đổi nên đi cùng "
-         "bộ benchmark khóa phiên bản và báo cáo trước/sau trên cùng ảnh, để nhóm biết thay đổi nào "
-         "thực sự có ích.")
-
-    d.add_heading("TÀI LIỆU VÀ MINH CHỨNG TRONG DỰ ÁN",1)
-    for x in [
-        "README.md — tổng quan, cài đặt, API và lưu ý về chỉ số cũ.",
-        "training/README.md; training/train_two_stage_colab.ipynb — dữ liệu, huấn luyện và hiệu chỉnh.",
-        "backend/README.md; backend/app.py; backend/two_stage.py; backend/video.py — pipeline và API.",
-        "frontend/src/components/FruitDetector.tsx — giao diện người dùng.",
-        "fruit_detection_runs_gcp_review/4169118715503181824/pipeline_check/v3_evaluation.json — classifier test.",
-        "fruit_detection_runs_gcp_review/regression_20261002/trial_abc_summary.json — benchmark detector.",
-        "fruit_detection_runs_gcp_review/regression_20261002/comparison.json — so sánh v3 và v4_repaired trên cùng bộ ảnh.",
-        "data/prepared/two_stage_maturity_v3/preparation_report.json — quy mô dữ liệu của checkpoint đang cài.",
-        "data/external/maturity_audit_report.json — kiểm toán nhãn và ảnh trùng.",
-    ]:bullet(d,x)
-    page_break(d)
-    d.add_heading("PHỤ LỤC A. GỢI Ý LỜI THUYẾT TRÌNH THEO SLIDE",1)
-    para(d,"Nội dung dưới đây cũng được nhúng vào Speaker Notes của tệp PowerPoint. Người trình bày có "
-         "thể điều chỉnh cách nói và thời lượng nhưng cần giữ nguyên phạm vi của các chỉ số.")
-    for i,(topic,script) in enumerate(TALK_TRACKS,1):
-        d.add_heading(f"Slide {i:02d}. {topic}",2)
-        para(d,script)
-
-    d.add_heading("PHỤ LỤC B. CÁCH CHẠY VÀ KIỂM TRA BẢN DEMO",1)
-    para(d,"Các bước dưới đây dành cho máy đã cài Python 3.10+ và Node.js 18+. Chạy lệnh từ thư mục "
-         "gốc fruit_detection; trọng số v3 và JSON calibration phải nằm trong backend/weights. "
-         "Các lệnh là hướng dẫn tái hiện bản demo tại máy, không phải yêu cầu để đọc báo cáo.")
-    add_table(d,["Bước","Lệnh hoặc thao tác","Kết quả mong đợi"],[
-        ["Cài backend","python3 -m venv .venv; source .venv/bin/activate; pip install -r backend/requirements.txt","Phụ thuộc FastAPI/Ultralytics được cài"],
-        ["Chạy backend","uvicorn backend.app:app --host 127.0.0.1 --port 8000","/health trả model_loaded=true"],
-        ["Cài và chạy frontend","cd frontend; npm ci; npm run dev","Mở http://localhost:5173"],
-        ["Kiểm tra ảnh","curl -F 'file=@fruit.jpg' 'http://127.0.0.1:8000/detect?conf_threshold=0.25'","JSON có total_count, detections, annotated_image_base64"],
-        ["Kiểm tra tài liệu API","Mở http://127.0.0.1:8000/docs","Có /detect, /detect-video, /health"],
-    ])
-    para(d,"Frontend ở chế độ phát triển dùng Vite proxy sang backend. Nếu đóng gói frontend để FastAPI "
-         "phục vụ cùng URL, cần chạy npm run build trước. Trong báo cáo trực tiếp, hãy mở /health và "
-         "kiểm tra pipeline_mode trước khi chụp hoặc trình bày kết quả, vì mode legacy và two-stage có "
-         "schema nhãn khác nhau. Nếu không có GPU, thời gian suy luận trên CPU có thể cao hơn; tài liệu "
-         "không nêu thời gian cố định khi chưa đo trên đúng máy.")
-    d.add_heading("PHỤ LỤC C. PHÂN CÔNG NHÓM",1)
-    para(d,"Điền tên, MSSV và phần việc thực tế của từng thành viên trước khi nộp. Không gán đóng góp khi "
-         "chưa có thông tin từ nhóm.")
-    add_table(d,["Thành viên / MSSV","Phần việc","Minh chứng"],
-              [["................................", "................................", "................................"] for _ in range(4)])
-
-    footer=d.sections[0].footer.paragraphs[0]
-    footer.alignment=WD_ALIGN_PARAGRAPH.CENTER
-    footer.add_run("SMART ORCHARD AI  •  BÁO CÁO NHÓM  |  Trang ")
-    fld=OxmlElement("w:fldSimple"); fld.set(qn("w:instr"),"PAGE")
-    footer._p.append(fld)
-    d.save(OUT / "Bao_cao_nhom_Smart_Orchard_AI.docx")
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pdf", type=Path, help="PDF of a first pass, used for TOC page numbers")
+    args = ap.parse_args()
+    page_map = {}
+    if args.pdf:
+        probe = Report()
+        write(probe)
+        page_map = page_map_from_pdf(args.pdf, probe.headings)
+    R = Report(page_map)
+    write(R)
+    R.save(OUT)
+    missing = [t for lvl, t in R.headings if lvl <= 2 and t not in page_map]
+    print("Created", OUT, "| TOC pages:", "from PDF" if args.pdf else "placeholder",
+          f"| unmatched headings: {len(missing)}" if args.pdf else "")
 
 
 if __name__ == "__main__":
-    OUT.mkdir(exist_ok=True)
-    # The slide deck now comes from build_presentation.py; this script only builds the Word report.
-    build_docx()
-    print("Created DOCX in",OUT,"(PPTX: run build_presentation.py)")
+    main()
